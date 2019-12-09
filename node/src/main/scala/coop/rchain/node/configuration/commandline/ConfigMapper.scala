@@ -108,6 +108,7 @@ object ConfigMapper {
         add(keys.DeployTimestamp, run.deployTimestamp)
         add(keys.FinalizationRate, run.finalizationRate)
         add(keys.MaxNumberOfParents, run.maxNumberOfParents)
+        add(keys.MaxParentDepth, run.maxParentDepth)
       }
     }
 
