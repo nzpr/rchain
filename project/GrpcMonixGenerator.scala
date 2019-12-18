@@ -5,13 +5,14 @@ import com.google.protobuf.ExtensionRegistry
 import com.google.protobuf.compiler.PluginProtos.{CodeGeneratorRequest, CodeGeneratorResponse}
 import scalapb.compiler.FunctionalPrinter.PrinterEndo
 import scalapb.compiler.{
-  DescriptorPimps,
+  DescriptorImplicits,
   FunctionalPrinter,
   GeneratorParams,
   ProtobufGenerator,
   StreamType
 }
 import scalapb.options.compiler.Scalapb
+import protocbridge.{Artifact, JvmGenerator, ProtocCodeGenerator}
 
 import scala.collection.JavaConverters._
 
@@ -22,14 +23,13 @@ object GrpcMonixGenerator {
   }
 }
 
-class GrpcMonixGenerator(override val params: GeneratorParams)
-    extends protocbridge.ProtocCodeGenerator
-    with DescriptorPimps {
+class GrpcMonixGenerator(val params: GeneratorParams)
+    extends protocbridge.ProtocCodeGenerator {
   def run(requestBytes: Array[Byte]): Array[Byte] = {
     // Read scalapb.options (if present) in .proto files
     val registry = ExtensionRegistry.newInstance()
     Scalapb.registerAllExtensions(registry)
-    val b       = CodeGeneratorResponse.newBuilder
+    val b = CodeGeneratorResponse.newBuilder
     val request = CodeGeneratorRequest.parseFrom(requestBytes, registry)
 
     val fileDescByName: Map[String, FileDescriptor] =
@@ -39,13 +39,19 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
           acc + (fp.getName -> FileDescriptor.buildFrom(fp, deps.toArray))
       }
 
+    val di = new DescriptorImplicits(params, fileDescByName.values.toVector)
+
     request.getFileToGenerateList.asScala.foreach { name =>
-      val fileDesc     = fileDescByName(name)
-      val responseFile = generateFile(fileDesc)
+      val fileDesc = fileDescByName(name)
+      val responseFile = new GrpcMonixCodeGenerator(params, di).generateFile(fileDesc)
       b.addFile(responseFile)
     }
     b.build.toByteArray
   }
+}
+
+class GrpcMonixCodeGenerator(params: GeneratorParams, di: DescriptorImplicits) {
+  import di._
 
   private[this] def grpcObserver(typeName: String) = s"StreamObserver[$typeName]"
 
@@ -54,6 +60,7 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
   private[this] def task(typeParam: String) = s"Task[$typeParam]"
 
   private[this] def serviceMethodDescriptor(method: MethodDescriptor): PrinterEndo = { printer =>
+    import di._
     val methodType = method.streamType match {
       case StreamType.Unary           => "UNARY"
       case StreamType.ClientStreaming => "CLIENT_STREAMING"
@@ -65,15 +72,15 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
 
     printer
       .add(
-        s"val ${method.descriptorName}: MethodDescriptor[${method.scalaIn}, ${method.scalaOut}] ="
+        s"val ${method.descriptorName}: MethodDescriptor[${method.inputType.scalaType}, ${method.outputType.scalaType}] ="
       )
       .indent
       .add("MethodDescriptor.newBuilder()")
       .addIndented(
         s".setType(MethodDescriptor.MethodType.$methodType)",
         s""".setFullMethodName(MethodDescriptor.generateFullMethodName("${method.getService.getFullName}", "${method.getName}"))""",
-        s".setRequestMarshaller(new Marshaller(${method.scalaIn}))",
-        s".setResponseMarshaller(new Marshaller(${method.scalaOut}))",
+        s".setRequestMarshaller(new Marshaller(${method.inputType.scalaType}))",
+        s".setResponseMarshaller(new Marshaller(${method.outputType.scalaType}))",
         ".build()"
       )
       .outdent
@@ -96,13 +103,13 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
   private[this] def serviceMethodSignature(method: MethodDescriptor) =
     s"def ${method.name}" + (method.streamType match {
       case StreamType.Unary =>
-        s"(request: ${method.scalaIn}): ${task(method.scalaOut)}"
+        s"(request: ${method.inputType.scalaType}): ${task(method.outputType.scalaType)}"
       case StreamType.ClientStreaming =>
-        s"(input: Observable[${method.scalaIn}]): ${task(method.scalaOut)}"
+        s"(input: Observable[${method.inputType.scalaType}]): ${task(method.outputType.scalaType)}"
       case StreamType.ServerStreaming =>
-        s"(request: ${method.scalaIn}): Observable[${method.scalaOut}]"
+        s"(request: ${method.inputType.scalaType}): Observable[${method.outputType.scalaType}]"
       case StreamType.Bidirectional =>
-        s"(input: Observable[${method.scalaIn}]): Observable[${method.scalaOut}]"
+        s"(input: Observable[${method.inputType.scalaType}]): Observable[${method.outputType.scalaType}]"
     })
 
   private[this] def serviceTrait(service: ServiceDescriptor): PrinterEndo = { printer =>
@@ -171,7 +178,7 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
         printer
           .add(s"override ${serviceMethodSignature(method)} = ")
           .indent
-          .add(s"${liftByGrpcOperator(method.scalaIn, method.scalaOut)}(")
+          .add(s"${liftByGrpcOperator(method.inputType.scalaType, method.outputType.scalaType)}(")
           .indent
           .add("input,")
           .add(s"outputObserver =>")
@@ -190,17 +197,17 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
         printer
           .add(s"override ${serviceMethodSignature(method)} = ")
           .indent
-          .add(s"Observable.fromReactivePublisher(new PublisherR[${method.scalaOut}] {")
+          .add(s"Observable.fromReactivePublisher(new PublisherR[${method.outputType.scalaType}] {")
           .indent
           .add(
-            s"override def subscribe(subscriber: SubscriberR[_ >: ${method.scalaOut}]): Unit = {"
+            s"override def subscribe(subscriber: SubscriberR[_ >: ${method.outputType.scalaType}]): Unit = {"
           )
           .indent
           .add("ClientCalls.asyncServerStreamingCall(")
           .addIndented(
             s"channel.newCall(${method.descriptorName}, options),",
             "request,",
-            s"reactiveSubscriberToGrpcObserver[${method.scalaOut}](subscriber)"
+            s"reactiveSubscriberToGrpcObserver[${method.outputType.scalaType}](subscriber)"
           )
           .add(")")
           .outdent
@@ -212,7 +219,7 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
         printer
           .add(s"override ${serviceMethodSignature(method)} = ")
           .indent
-          .add(s"${liftByGrpcOperator(method.scalaIn, method.scalaOut)}(")
+          .add(s"${liftByGrpcOperator(method.inputType.scalaType, method.outputType.scalaType)}(")
           .indent
           .add("input,")
           .add("outputObserver =>")
@@ -259,18 +266,18 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
       case StreamType.Bidirectional   => "ServerCalls.asyncBidiStreamingCall"
     }
     val serverMethod = method.streamType match {
-      case StreamType.Unary => s"ServerCalls.UnaryMethod[${method.scalaIn}, ${method.scalaOut}]"
+      case StreamType.Unary => s"ServerCalls.UnaryMethod[${method.inputType.scalaType}, ${method.outputType.scalaType}]"
       case StreamType.ClientStreaming =>
-        s"ServerCalls.ClientStreamingMethod[${method.scalaIn}, ${method.scalaOut}]"
+        s"ServerCalls.ClientStreamingMethod[${method.inputType.scalaType}, ${method.outputType.scalaType}]"
       case StreamType.ServerStreaming =>
-        s"ServerCalls.ServerStreamingMethod[${method.scalaIn}, ${method.scalaOut}]"
+        s"ServerCalls.ServerStreamingMethod[${method.inputType.scalaType}, ${method.outputType.scalaType}]"
       case StreamType.Bidirectional =>
-        s"ServerCalls.BidiStreamingMethod[${method.scalaIn}, ${method.scalaOut}]"
+        s"ServerCalls.BidiStreamingMethod[${method.inputType.scalaType}, ${method.outputType.scalaType}]"
     }
     val impl: PrinterEndo = method.streamType match {
       case StreamType.Unary =>
         _.add(
-          s"override def invoke(request: ${method.scalaIn}, observer: ${grpcObserver(method.scalaOut)}): Unit ="
+          s"override def invoke(request: ${method.inputType.scalaType}, observer: ${grpcObserver(method.outputType.scalaType)}): Unit ="
         ).indent
           .add(
             s"serviceImpl.${method.name}(request).runAsync(grpcObserverToMonixCallback(observer))(scheduler)"
@@ -278,10 +285,10 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
           .outdent
       case StreamType.ClientStreaming =>
         _.add(
-          s"override def invoke(observer: ${grpcObserver(method.scalaOut)}): ${grpcObserver(method.scalaIn)} = {"
+          s"override def invoke(observer: ${grpcObserver(method.outputType.scalaType)}): ${grpcObserver(method.inputType.scalaType)} = {"
         ).indent
           .add("val outputSubscriber = grpcObserverToMonixSubscriber(observer, scheduler)")
-          .add(s"val inputSubscriber = ${unliftByTransformer(method.scalaIn, method.scalaOut)}(")
+          .add(s"val inputSubscriber = ${unliftByTransformer(method.inputType.scalaType, method.outputType.scalaType)}(")
           .indent
           .add(
             s"inputObservable => Observable.fromTask(serviceImpl.${method.name}(inputObservable)),"
@@ -294,7 +301,7 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
           .add("}")
       case StreamType.ServerStreaming =>
         _.add(
-          s"override def invoke(request: ${method.scalaIn}, observer: ${grpcObserver(method.scalaOut)}): Unit = "
+          s"override def invoke(request: ${method.inputType.scalaType}, observer: ${grpcObserver(method.outputType.scalaType)}): Unit = "
         ).indent
           .add(
             s"serviceImpl.${method.name}(request).subscribe(grpcObserverToMonixSubscriber(observer, scheduler))"
@@ -302,10 +309,10 @@ class GrpcMonixGenerator(override val params: GeneratorParams)
           .outdent
       case StreamType.Bidirectional =>
         _.add(
-          s"override def invoke(observer: ${grpcObserver(method.scalaOut)}): ${grpcObserver(method.scalaIn)} = {"
+          s"override def invoke(observer: ${grpcObserver(method.outputType.scalaType)}): ${grpcObserver(method.inputType.scalaType)} = {"
         ).indent
           .add("val outputSubscriber = grpcObserverToMonixSubscriber(observer, scheduler)")
-          .add(s"val inputSubscriber = ${unliftByTransformer(method.scalaIn, method.scalaOut)}(")
+          .add(s"val inputSubscriber = ${unliftByTransformer(method.inputType.scalaType, method.outputType.scalaType)}(")
           .indent
           .add(s"inputObservable => serviceImpl.${method.name}(inputObservable),")
           .add("outputSubscriber")

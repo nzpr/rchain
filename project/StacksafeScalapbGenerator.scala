@@ -6,6 +6,9 @@ import com.google.protobuf.Descriptors.{
   FileDescriptor,
   OneofDescriptor
 }
+import scalapb.compiler.{
+  DescriptorImplicits
+}
 import com.google.protobuf.ExtensionRegistry
 import com.google.protobuf.compiler.PluginProtos.{CodeGeneratorRequest, CodeGeneratorResponse}
 import protocbridge.{Artifact, JvmGenerator, ProtocCodeGenerator}
@@ -79,15 +82,16 @@ object StacksafeProtobufGenerator {
     parseParameters(request.getParameter) match {
       case Right(params) =>
         try {
-          val generator = new StacksafeProtobufGenerator(params)
-          import generator.FileDescriptorPimp
           val filesByName: Map[String, FileDescriptor] =
             request.getProtoFileList.asScala.foldLeft[Map[String, FileDescriptor]](Map.empty) {
               case (acc, fp) =>
                 val deps = fp.getDependencyList.asScala.map(acc)
                 acc + (fp.getName -> FileDescriptor.buildFrom(fp, deps.toArray))
             }
-          val validator = new ProtoValidation(params)
+          val di = new DescriptorImplicits(params, filesByName.values.toVector)
+          import di.FileDescriptorPimp
+          val generator = new StacksafeProtobufGenerator(params, di)
+          val validator = new ProtoValidation(di)
           filesByName.values.foreach(validator.validateFile)
           request.getFileToGenerateList.asScala.foreach { name =>
             val file = filesByName(name)
@@ -110,8 +114,8 @@ object StacksafeProtobufGenerator {
 }
 
 //copied and adapted from scalapb.compiler.ProtobufGenerator
-class StacksafeProtobufGenerator(params: GeneratorParams) extends ProtobufGenerator(params) {
-
+class StacksafeProtobufGenerator(params: GeneratorParams, di: DescriptorImplicits) extends ProtobufGenerator(params, di) {
+  import di._
   override def printMessage(printer: FunctionalPrinter, message: Descriptor): FunctionalPrinter = {
     val value = super.printMessage(printer, message).result()
     val extended = value.replace(
