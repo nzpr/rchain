@@ -57,7 +57,7 @@ object Dependencies {
   val scalaUri            = "io.lemonlabs"               %% "scala-uri"                 % "1.1.5"
   val scalacheck          = "org.scalacheck"             %% "scalacheck"                % "1.14.3"
   val scalacheckShapeless = "com.github.alexarchambault" %% "scalacheck-shapeless_1.13" % "1.2.3" % "test"
-  val scalactic           = "org.scalactic"              %% "scalactic"                 % "3.0.5" % "test"
+  val scalactic           = "org.scalactic"              %% "scalactic"                 % "3.2.0-M2" % "test"
   val scalapbCompiler     = "com.thesamet.scalapb"       %% "compilerplugin"            % scalapb.compiler.Version.scalapbVersion
   val scalapbRuntime      = "com.thesamet.scalapb"       %% "scalapb-runtime"           % scalapb.compiler.Version.scalapbVersion % "protobuf"
   val scalapbRuntimeLib   = "com.thesamet.scalapb"       %% "scalapb-runtime"           % scalapb.compiler.Version.scalapbVersion
@@ -68,7 +68,7 @@ object Dependencies {
   val nettyTcnative       = "io.netty"                    % "netty-tcnative"            % "2.0.8.Final" classifier osClassifier
   val nettyTcnativeLinux  = "io.netty"                    % "netty-tcnative"            % "2.0.8.Final" classifier "linux-x86_64"
   val nettyTcnativeFedora = "io.netty"                    % "netty-tcnative"            % "2.0.8.Final" classifier "linux-x86_64-fedora"
-  val scalatest           = "org.scalatest"              %% "scalatest"                 % "3.0.5" % "test"
+  val scalatest           = "org.scalatest"              %% "scalatest"                 % "3.2.0-M2" % "test"
   val scallop             = "org.rogach"                 %% "scallop"                   % "3.1.4"
   val scodecCore          = "org.scodec"                 %% "scodec-core"               % "1.11.4"
   val scodecCats          = "org.scodec"                 %% "scodec-cats"               % "1.0.0"
@@ -96,18 +96,14 @@ object Dependencies {
     "org.typelevel"            %% "machinist"              % "0.6.5",
     "org.typelevel"            %% "catalysts-platform"     % "0.6",
     "com.lihaoyi"              %% "sourcecode"             % "0.1.4",
-    "org.scala-lang.modules"   %% "scala-xml"              % "1.1.0",
+    "org.scala-lang.modules"   %% "scala-xml"              % "1.2.0",
     "com.google.code.findbugs" % "jsr305"                  % "3.0.2",
     "com.google.errorprone"    % "error_prone_annotations" % "2.1.2",
     "com.github.jnr"           % "jnr-ffi"                 % "2.1.7",
     "org.slf4j"                % "slf4j-api"               % "1.7.30"
   )
 
-  private val kindProjector = compilerPlugin("org.spire-math" %% "kind-projector" % "0.9.9")
-
-  private val macroParadise = compilerPlugin(
-    "org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full
-  )
+  private val kindProjector = compilerPlugin("org.typelevel" % "kind-projector_2.13.1" % "0.11.0")
 
   private val testing = Seq(scalactic, scalatest, scalacheck)
 
@@ -132,5 +128,5 @@ object Dependencies {
     http4sDependencies ++ circeDependencies
 
   val commonDependencies: Seq[ModuleID] =
-    logging ++ testing :+ kindProjector :+ macroParadise
+    logging ++ testing :+ kindProjector
 }
