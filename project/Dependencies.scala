@@ -11,7 +11,7 @@ object Dependencies {
   val catsVersion       = "2.1.0"
   val catsEffectVersion = "2.0.0"
   val catsMtlVersion    = "0.7.0"
-  val slf4jVersion      = "1.7.25"
+  val slf4jVersion      = "1.7.30"
 
   // format: off
   val bouncyProvCastle    = "org.bouncycastle"           % "bcprov-jdk15on"             % "1.61"
@@ -99,7 +99,8 @@ object Dependencies {
     "org.scala-lang.modules"   %% "scala-xml"              % "1.1.0",
     "com.google.code.findbugs" % "jsr305"                  % "3.0.2",
     "com.google.errorprone"    % "error_prone_annotations" % "2.1.2",
-    "com.github.jnr"           % "jnr-ffi"                 % "2.1.7"
+    "com.github.jnr"           % "jnr-ffi"                 % "2.1.7",
+    "org.slf4j"                % "slf4j-api"               % "1.7.30"
   )
 
   private val kindProjector = compilerPlugin("org.spire-math" %% "kind-projector" % "0.9.9")
