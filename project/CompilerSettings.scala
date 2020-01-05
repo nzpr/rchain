@@ -17,8 +17,8 @@ object CompilerSettings {
   private lazy val commonOptions =
     // format: off
     Seq(
-      "-Xfuture",
-      "-Ypartial-unification",
+      //"-Xfuture",
+      //"-Ypartial-unification",
       "-Ywarn-dead-code",
       "-Ywarn-numeric-widen",
       "-deprecation",
