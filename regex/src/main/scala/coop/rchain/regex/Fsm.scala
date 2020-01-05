@@ -436,7 +436,7 @@ final case class Fsm(
     * You can use this in list comprehensions.
     */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def strings: Stream[String] = {
+  def strings: LazyList[String] = {
     // Many FSMs have "dead states". Once you reach a dead state, you can no
     // longer reach a final state. Since many strings may end up here, it's
     // advantageous to constrain our search to live states only.
@@ -491,12 +491,12 @@ final case class Fsm(
         }
       }
 
-    def genStream: Stream[String] = {
+    def genStream: LazyList[String] = {
       val str = nextStr
       if (str.isDefined) {
         str.get #:: genStream
       } else {
-        Stream.empty[String]
+        LazyList.empty[String]
       }
     }
     genStream

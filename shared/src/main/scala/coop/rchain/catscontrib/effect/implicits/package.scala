@@ -1,6 +1,6 @@
 package coop.rchain.catscontrib.effect
 
-import cats._
+import cats.{implicits => implicits, _}
 import cats.effect.ExitCase.{Completed, Error}
 import cats.effect._
 
