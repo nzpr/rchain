@@ -95,12 +95,13 @@ object Dependencies {
     //overrides for transitive dependencies (we don't use them directly, hence no val-s)
     "org.typelevel"            %% "machinist"              % "0.6.5",
     "org.typelevel"            %% "catalysts-platform"     % "0.6",
-    "com.lihaoyi"              %% "sourcecode"             % "0.1.4",
+    "com.lihaoyi"              %% "sourcecode"             % "0.1.9",
     "org.scala-lang.modules"   %% "scala-xml"              % "1.2.0",
     "com.google.code.findbugs" % "jsr305"                  % "3.0.2",
     "com.google.errorprone"    % "error_prone_annotations" % "2.1.2",
     "com.github.jnr"           % "jnr-ffi"                 % "2.1.7",
-    "org.slf4j"                % "slf4j-api"               % "1.7.30"
+    "org.slf4j"                % "slf4j-api"               % "1.7.30",
+    "com.google.protobuf"      % "protobuf-java"           % "3.11.1"
   )
 
   private val kindProjector = compilerPlugin("org.typelevel" % "kind-projector_2.13.1" % "0.11.0")
