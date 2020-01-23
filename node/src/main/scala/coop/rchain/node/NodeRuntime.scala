@@ -701,7 +701,8 @@ object NodeRuntime {
         blockStore,
         blockDagStorage,
         oracle,
-        deployStorage
+        deployStorage,
+        Metrics[F]
       )
       synchronyConstraintChecker = SynchronyConstraintChecker[F](
         conf.server.synchronyConstraintThreshold

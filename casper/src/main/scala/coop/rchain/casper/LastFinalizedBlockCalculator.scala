@@ -10,10 +10,15 @@ import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.catscontrib.ListContrib
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.shared.Log
+import coop.rchain.metrics.Metrics
 
-final class LastFinalizedBlockCalculator[F[_]: Sync: Log: Concurrent: BlockStore: BlockDagStorage: SafetyOracle: DeployStorage](
+final class LastFinalizedBlockCalculator[F[_]: Sync: Log: Concurrent: BlockStore: BlockDagStorage: SafetyOracle: DeployStorage: Metrics](
     faultToleranceThreshold: Float
 ) {
+
+  implicit private val metricsSource: Metrics.Source =
+    Metrics.Source(Metrics.BaseSource, "last-finalized-block-calculator")
+
   def run(dag: BlockDagRepresentation[F], lastFinalizedBlockHash: BlockHash)(
       implicit state: CasperStateCell[F]
   ): F[BlockHash] =
@@ -37,11 +42,13 @@ final class LastFinalizedBlockCalculator[F[_]: Sync: Log: Concurrent: BlockStore
     for {
       block          <- ProtoUtil.getBlock[F](finalizedChildHash)
       deploys        = block.body.deploys.map(_.deploy)
+      height         = block.body.state.blockNumber.toLong
       deploysRemoved <- DeployStorage[F].remove(deploys)
       _ <- Log[F].info(
             s"Removed $deploysRemoved deploys from deploy history as we finalized block ${PrettyPrinter
-              .buildString(finalizedChildHash)}."
+              .buildString(finalizedChildHash)} at height $height."
           )
+      _ <- Metrics[F].setGauge("last-finalised-block-height", height)
     } yield ()
 
   /*
@@ -68,7 +75,7 @@ object LastFinalizedBlockCalculator {
   def apply[F[_]](implicit ev: LastFinalizedBlockCalculator[F]): LastFinalizedBlockCalculator[F] =
     ev
 
-  def apply[F[_]: Sync: Log: Concurrent: BlockStore: BlockDagStorage: SafetyOracle: DeployStorage](
+  def apply[F[_]: Sync: Log: Concurrent: BlockStore: BlockDagStorage: SafetyOracle: DeployStorage: Metrics](
       faultToleranceThreshold: Float
   ): LastFinalizedBlockCalculator[F] =
     new LastFinalizedBlockCalculator[F](faultToleranceThreshold)
