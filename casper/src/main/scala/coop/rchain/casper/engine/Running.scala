@@ -115,7 +115,7 @@ object Running {
       hash: BlockHash,
       peer: Option[PeerNode] = None
   ): F[Unit] =
-    Log[F].info(s"Creating new entry for the ${PrettyPrinter.buildString(hash)} request") >> Time[F].currentMillis >>= (
+    Log[F].debug(s"Creating new entry for the ${PrettyPrinter.buildString(hash)} request") >> Time[F].currentMillis >>= (
         ts => RequestedBlocks.put(hash, Requested(timestamp = ts, peers = peer.toSet))
     )
 
