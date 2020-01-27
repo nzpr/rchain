@@ -93,6 +93,8 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
   private[this] val computeStateLabel = Metrics.Source(RuntimeManagerMetricsSource, "compute-state")
   private[this] val computeGenesisLabel =
     Metrics.Source(RuntimeManagerMetricsSource, "compute-genesis")
+  private[this] val processDeployWithCostAccountingLabel =
+    Metrics.Source(RuntimeManagerMetricsSource, "process-deploy-with-ca")
 
   private val systemDeployConsumeAllPattern =
     BindPattern(List(toPar(Expr(EVarBody(EVar(Var(FreeVar(0))))))), freeCount = 1)
@@ -157,10 +159,12 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
       systemDeploy: S
   ): F[(Vector[Event], Either[SystemDeployError, systemDeploy.Result])] =
     for {
+      _              <- Span[F].mark("play-system-deploy-start")
       evaluateResult <- evaluateSystemSource(runtime)(systemDeploy, replay = false)
       maybeConsumedTuple <- if (evaluateResult.failed)
                              UnexpectedSystemErrors(evaluateResult.errors).raiseError
                            else consumeResult(runtime)(systemDeploy, replay = false)
+      _ <- Span[F].mark("after-maybeConsumedTuple")
       resultOrSystemDeployError <- maybeConsumedTuple match {
                                     case Some((_, Seq(ListParWithRandom(Seq(par), _)))) =>
                                       systemDeploy.extractResult(par) match {
@@ -180,8 +184,11 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
                                       UnexpectedResult(unexpectedResults.flatMap(_.pars)).raiseError
                                     case None => ConsumeFailed.raiseError
                                   }
+      _                        <- Span[F].mark("after-resultOrSystemDeployError")
       postDeploySoftCheckpoint <- runtime.space.createSoftCheckpoint()
+      _                        <- Span[F].mark("after-postDeploySoftCheckpoint")
       log                      = postDeploySoftCheckpoint.log
+      _                        <- Span[F].mark("play-system-deploy-end")
     } yield (log.map(EventConverter.toCasperEvent).toVector, resultOrSystemDeployError)
 
   def replaySystemDeploy[S <: SystemDeploy](stateHash: StateHash)(
@@ -355,69 +362,70 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
 
   private def processDeployWithCostAccounting(
       runtime: Runtime[F]
-  )(deploy: Signed[DeployData])(implicit Log: Log[F]) = {
-    import cats.instances.vector._
-    val rand = Tools.rng(deploy.sig.toByteArray)
-    EitherT(
-      WriterT(
-        Log.info(
-          s"PreCharging ${Base16.encode(deploy.pk.bytes)} for ${deploy.data.totalPhloCharge}"
-        ) >>
-          /* execute pre-charge */
-          playSystemDeployInternal(runtime)(
-            new PreChargeDeploy(
-              deploy.data.totalPhloCharge,
-              deploy.pk,
-              rand
+  )(deploy: Signed[DeployData])(implicit Log: Log[F]) =
+    Span[F].trace(processDeployWithCostAccountingLabel) {
+      import cats.instances.vector._
+      val rand = Tools.rng(deploy.sig.toByteArray)
+      EitherT(
+        WriterT(
+          Log.info(
+            s"PreCharging ${Base16.encode(deploy.pk.bytes)} for ${deploy.data.totalPhloCharge}"
+          ) >>
+            /* execute pre-charge */
+            playSystemDeployInternal(runtime)(
+              new PreChargeDeploy(
+                deploy.data.totalPhloCharge,
+                deploy.pk,
+                rand
+              )
             )
-          )
-      )
-    ).semiflatMap( // execute user deploy
-        _ => WriterT(processDeploy(runtime)(deploy).map(pd => (pd.deployLog.toVector, pd)))
-      )
-      .flatTap(
-        pd =>
-          /*execute Refund as a side effect (keeping the logs and the possible error but discarding result)*/
-          EitherT(
-            WriterT(
-              Log.info(
-                s"Refunding ${Base16.encode(deploy.pk.bytes)} with ${pd.refundAmount}"
-              ) >>
-                playSystemDeployInternal(runtime)(
-                  new RefundDeploy(pd.refundAmount, rand.splitByte(64))
-                )
+        )
+      ).semiflatMap( // execute user deploy
+          _ => WriterT(processDeploy(runtime)(deploy).map(pd => (pd.deployLog.toVector, pd)))
+        )
+        .flatTap(
+          pd =>
+            /*execute Refund as a side effect (keeping the logs and the possible error but discarding result)*/
+            EitherT(
+              WriterT(
+                Log.info(
+                  s"Refunding ${Base16.encode(deploy.pk.bytes)} with ${pd.refundAmount}"
+                ) >>
+                  playSystemDeployInternal(runtime)(
+                    new RefundDeploy(pd.refundAmount, rand.splitByte(64))
+                  )
+              )
+            ).leftSemiflatMap(
+              error =>
+                /*If pre-charge succeeds and refund fails, it's a platform error and we should signal it with raiseError*/ WriterT
+                  .liftF(
+                    Log.warn(s"Refund failure '${error.errorMsg}'") >> GasRefundFailure(
+                      error.errorMsg
+                    ).raiseError
+                  )
             )
-          ).leftSemiflatMap(
-            error =>
-              /*If pre-charge succeeds and refund fails, it's a platform error and we should signal it with raiseError*/ WriterT
-                .liftF(
-                  Log.warn(s"Refund failure '${error.errorMsg}'") >> GasRefundFailure(
-                    error.errorMsg
-                  ).raiseError
-                )
-          )
-      )
-      .onError {
-        case SystemDeployError(errorMsg) =>
-          EitherT.right(WriterT.liftF(Log.warn(s"Deploy failure '$errorMsg'")))
-      }
-      .valueOr {
-        /* we can end up here if any of the PreCharge threw an user error
+        )
+        .onError {
+          case SystemDeployError(errorMsg) =>
+            EitherT.right(WriterT.liftF(Log.warn(s"Deploy failure '$errorMsg'")))
+        }
+        .valueOr {
+          /* we can end up here if any of the PreCharge threw an user error
         we still keep the logs (from the underlying WriterT) which we'll fill in the next step.
         We're assigning it 0 cost - replay should reach the same state
-         */
-        case SystemDeployError(errorMsg) =>
-          ProcessedDeploy
-            .empty(deploy)
-            .copy(systemDeployError = Some(errorMsg))
-      }
-      .run // run the computation and produce the logs
-      .map { case (accLog, pd) => pd.copy(deployLog = accLog.toList) }
-  }
+           */
+          case SystemDeployError(errorMsg) =>
+            ProcessedDeploy
+              .empty(deploy)
+              .copy(systemDeployError = Some(errorMsg))
+        }
+        .run // run the computation and produce the logs
+        .map { case (accLog, pd) => pd.copy(deployLog = accLog.toList) }
+    }
 
   private def processDeploy(runtime: Runtime[F])(
       deploy: Signed[DeployData]
-  ): F[ProcessedDeploy] = Span[F].withMarks("process-deploy") {
+  ): F[ProcessedDeploy] = Span[F].withMarks("process-user-deploy") {
     for {
       fallback                     <- runtime.space.createSoftCheckpoint()
       evaluateResult               <- evaluate(runtime.reducer, runtime.cost, runtime.errorLog)(deploy)
