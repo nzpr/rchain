@@ -77,6 +77,7 @@ object BlockAPI {
             case true =>
               implicit val ms = BlockAPIMetricsSource
               (for {
+                _ <- Log[F].info("Proposing a block...")
                 _ <- Metrics[F].incrementCounter("propose")
                 // TODO: Get rid off CreateBlockStatus and use EitherT
                 maybeBlock <- casper.createBlock
@@ -86,7 +87,7 @@ object BlockAPI {
                                .asLeft[String]
                                .pure[F]
                            case Created(block) =>
-                             Log[F].info(s"Proposing ${PrettyPrinter.buildString(block)}") *>
+                             Log[F].info(s"Created ${PrettyPrinter.buildString(block)} .") *>
                                casper
                                  .addBlock(block) >>= (addResponse(
                                _,
