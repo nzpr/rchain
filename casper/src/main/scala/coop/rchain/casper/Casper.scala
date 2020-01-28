@@ -49,6 +49,8 @@ trait Casper[F[_]] {
   def deploy(d: Signed[DeployData]): F[Either[DeployError, DeployId]]
   def estimator(dag: BlockDagRepresentation[F]): F[IndexedSeq[BlockHash]]
   def createBlock: F[CreateBlockStatus]
+  def getGenesis: BlockMessage
+  def getValidatorId: ValidatorIdentity
 }
 
 trait MultiParentCasper[F[_]] extends Casper[F] {

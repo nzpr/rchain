@@ -3,14 +3,19 @@ package coop.rchain.node.api
 import cats.effect.concurrent.Semaphore
 import cats.effect.Concurrent
 import cats.implicits._
-
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.casper.engine._
 import EngineCell._
-import coop.rchain.casper.SafetyOracle
+import coop.rchain.blockstorage.dag.BlockDagStorage
+import coop.rchain.casper.{
+  LastFinalizedHeightConstraintChecker,
+  SafetyOracle,
+  SynchronyConstraintChecker
+}
 import coop.rchain.casper.api.BlockAPI
 import coop.rchain.casper.protocol.{PrintUnmatchedSendsQuery, ServiceError}
 import coop.rchain.casper.protocol.propose.v1.{ProposeResponse, ProposeServiceV1GrpcMonix}
+import coop.rchain.casper.util.rholang.RuntimeManager
 import coop.rchain.catscontrib.Catscontrib._
 import coop.rchain.catscontrib.Taskable
 import coop.rchain.catscontrib.TaskContrib._
@@ -18,12 +23,11 @@ import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.StacksafeMessage
 import coop.rchain.shared._
 import coop.rchain.shared.ThrowableOps._
-
 import monix.eval.Task
 import monix.execution.Scheduler
 
 object ProposeGrpcServiceV1 {
-  def instance[F[_]: Concurrent: Log: SafetyOracle: BlockStore: Metrics: Taskable: Span: EngineCell](
+  def instance[F[_]: LastFinalizedHeightConstraintChecker: SynchronyConstraintChecker: RuntimeManager: Concurrent: Log: SafetyOracle: BlockStore: BlockDagStorage: Metrics: Taskable: Span: EngineCell](
       blockApiLock: Semaphore[F]
   )(
       implicit worker: Scheduler
@@ -47,11 +51,13 @@ object ProposeGrpcServiceV1 {
             )
           )
 
-      def propose(request: PrintUnmatchedSendsQuery): Task[ProposeResponse] =
+      def propose(request: PrintUnmatchedSendsQuery): Task[ProposeResponse] = {
+        Log[F].info(s"Block creation is triggered via grpc endpoint.")
         defer(BlockAPI.createBlock[F](blockApiLock, request.printUnmatchedSends)) { r =>
           import ProposeResponse.Message
           import ProposeResponse.Message._
           ProposeResponse(r.fold[Message](Error, Result))
         }
+      }
     }
 }

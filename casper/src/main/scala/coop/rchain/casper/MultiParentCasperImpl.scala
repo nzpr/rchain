@@ -72,6 +72,9 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
   private[this] val AddBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "add-block")
 
+  def getGenesis: BlockMessage          = genesis
+  def getValidatorId: ValidatorIdentity = validatorId.get
+
   def addBlock(b: BlockMessage): F[ValidBlockProcessing] = {
 
     def logAlreadyProcessed: F[ValidBlockProcessing] =
@@ -299,7 +302,7 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
           updatedDag <- BlockDagStorage[F].insert(block, genesis, invalid = false)
           _          <- CommUtil[F].sendBlockHash(block.blockHash, block.sender)
           _ <- Log[F].info(
-                s"Added ${PrettyPrinter.buildString(block.blockHash)}"
+                s"Block ${PrettyPrinter.buildString(block.blockHash)} added."
               )
           _ <- updateLastFinalizedBlock(block)
         } yield updatedDag

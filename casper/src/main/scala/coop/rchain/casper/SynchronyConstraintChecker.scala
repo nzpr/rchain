@@ -33,10 +33,9 @@ final class SynchronyConstraintChecker[F[_]: Sync: BlockStore: Log](
 
   def check(
       dag: BlockDagRepresentation[F],
-      runtimeManager: RuntimeManager[F],
       genesis: BlockMessage,
       validator: Validator
-  ): F[Boolean] =
+  )(implicit runtimeManager: RuntimeManager[F]): F[Boolean] =
     dag.latestMessageHash(validator).flatMap {
       case Some(lastProposedBlockHash) if lastProposedBlockHash == genesis.blockHash =>
         // The node has not proposed any block yet and hence allowed to propose once

@@ -8,9 +8,9 @@ import cats.implicits._
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.casper.engine._
 import EngineCell._
-import coop.rchain.blockstorage.dag.BlockDagRepresentation
+import coop.rchain.blockstorage.dag.{BlockDagRepresentation, BlockDagStorage}
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
-import coop.rchain.casper._
+import coop.rchain.casper.{LastFinalizedHeightConstraintChecker, SynchronyConstraintChecker, _}
 import coop.rchain.casper.DeployError._
 import coop.rchain.casper.MultiParentCasper.ignoreDoppelgangerCheck
 import coop.rchain.casper.protocol._
@@ -65,64 +65,90 @@ object BlockAPI {
     ))
   }
 
-  def createBlock[F[_]: Sync: Concurrent: EngineCell: Log: Metrics: Span](
+  def createBlock[F[_]: Sync: Concurrent: EngineCell: Log: Metrics: Span: BlockDagStorage: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: RuntimeManager](
       blockApiLock: Semaphore[F],
       printUnmatchedSends: Boolean = false
-  ): F[ApiErr[String]] = Span[F].trace(CreateBlockSource) {
-    val errorMessage = "Could not create block, casper instance was not available yet."
-    EngineCell[F].read >>= (
-      _.withCasper[ApiErr[String]](
-        casper => {
-          Sync[F].bracket(blockApiLock.tryAcquire) {
-            case true =>
-              implicit val ms = BlockAPIMetricsSource
-              (for {
-                _ <- Log[F].info("Proposing a block...")
-                _ <- Metrics[F].incrementCounter("propose")
-                // TODO: Get rid off CreateBlockStatus and use EitherT
-                maybeBlock <- casper.createBlock
-                result <- maybeBlock match {
-                           case err: NoBlock =>
-                             s"Error while creating block: $err"
-                               .asLeft[String]
-                               .pure[F]
-                           case Created(block) =>
-                             Log[F].info(s"Created ${PrettyPrinter.buildString(block)} .") *>
-                               casper
-                                 .addBlock(block) >>= (addResponse(
-                               _,
-                               block,
-                               casper,
-                               printUnmatchedSends
-                             ))
-                         }
-              } yield result)
-                .timer("propose-total-time")
-                .attempt
-                .map(_.leftMap(e => s"Error while creating block: ${e.getMessage}").joinRight)
-                .flatMap {
-                  case Left(error) =>
-                    Metrics[F].incrementCounter("propose-failed") >>
-                      Log[F].warn(error) >>
-                      error.asLeft[String].pure[F]
-                  case result =>
-                    result.pure[F]
-                }
-            case false =>
-              "Error: There is another propose in progress.".asLeft[String].pure[F]
-          } {
-            case true =>
-              blockApiLock.release
-            case false =>
-              ().pure[F]
-          }
-        },
-        default = Log[F]
-          .warn(errorMessage)
-          .as(s"Error: $errorMessage".asLeft)
+  ): F[ApiErr[String]] =
+    Span[F].trace(CreateBlockSource) {
+      val errorMessage = "Could not create block, casper instance was not available yet."
+      EngineCell[F].read >>= (
+        _.withCasper[ApiErr[String]](
+          casper => {
+            BlockDagStorage[F].getRepresentation
+              .flatMap { dag =>
+                SynchronyConstraintChecker[F]
+                  .check(
+                    dag,
+                    casper.getGenesis,
+                    ByteString.copyFrom(casper.getValidatorId.publicKey.bytes)
+                  )
+                  .ifM(
+                    LastFinalizedHeightConstraintChecker[F]
+                      .check(
+                        dag,
+                        casper.getGenesis,
+                        ByteString.copyFrom(casper.getValidatorId.publicKey.bytes)
+                      )
+                      .ifM(
+                        Sync[F].bracket(blockApiLock.tryAcquire) {
+                          case true =>
+                            implicit val ms = BlockAPIMetricsSource
+                            (for {
+                              _ <- Log[F].info("Proposing a block...")
+                              _ <- Metrics[F].incrementCounter("propose")
+                              // TODO: Get rid off CreateBlockStatus and use EitherT
+                              maybeBlock <- casper.createBlock
+                              result <- maybeBlock match {
+                                         case err: NoBlock =>
+                                           s"Error while creating block: $err"
+                                             .asLeft[String]
+                                             .pure[F]
+                                         case Created(block) =>
+                                           Log[F].info(
+                                             s"Created ${PrettyPrinter.buildString(block)} ."
+                                           ) *>
+                                             casper
+                                               .addBlock(block) >>= (addResponse(
+                                             _,
+                                             block,
+                                             casper,
+                                             printUnmatchedSends
+                                           ))
+                                       }
+                            } yield result)
+                              .timer("propose-total-time")
+                              .attempt
+                              .map(
+                                _.leftMap(e => s"Error while creating block: ${e.getMessage}").joinRight
+                              )
+                              .flatMap {
+                                case Left(error) =>
+                                  Metrics[F].incrementCounter("propose-failed") >>
+                                    Log[F].warn(error) >>
+                                    error.asLeft[String].pure[F]
+                                case result =>
+                                  result.pure[F]
+                              }
+                          case false =>
+                            "Error: There is another propose in progress.".asLeft[String].pure[F]
+                        } {
+                          case true =>
+                            blockApiLock.release
+                          case false =>
+                            ().pure[F]
+                        },
+                        "Error: Too far ahead of last finalized block.".asLeft[String].pure[F]
+                      ),
+                    "Error: synchrony constraint checker failed.".asLeft[String].pure[F]
+                  )
+              }
+          },
+          default = Log[F]
+            .warn(errorMessage)
+            .as(s"Error: $errorMessage".asLeft)
+        )
       )
-    )
-  }
+    }
 
   def getListeningNameDataResponse[F[_]: Concurrent: EngineCell: Log: SafetyOracle: BlockStore](
       depth: Int,

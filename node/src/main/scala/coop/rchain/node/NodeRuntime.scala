@@ -781,16 +781,21 @@ object NodeRuntime {
         )
       }
       blockApiLock <- Semaphore[F](1)
-      apiServers = NodeRuntime.acquireAPIServers[F](runtime, blockApiLock, scheduler)(
-        blockStore,
-        oracle,
-        Concurrent[F],
-        Metrics[F],
-        span,
-        engineCell,
-        Log[F],
-        Taskable[F]
-      )
+      apiServers = NodeRuntime
+        .acquireAPIServers[F](runtime, blockApiLock, scheduler)(
+          blockStore,
+          oracle,
+          Concurrent[F],
+          Metrics[F],
+          span,
+          engineCell,
+          Log[F],
+          Taskable[F],
+          runtimeManager,
+          synchronyConstraintChecker,
+          lastFinalizedHeightConstraintChecker,
+          blockDagStorage
+        )
       casperLoop = for {
         engine <- engineCell.read
         _      <- engine.withCasper(_.fetchDependencies, Applicative[F].unit)
@@ -846,7 +851,11 @@ object NodeRuntime {
       span: Span[F],
       engineCell: EngineCell[F],
       logF: Log[F],
-      taskable: Taskable[F]
+      taskable: Taskable[F],
+      runtimeManager: RuntimeManager[F],
+      synchronyConstraintChecker: SynchronyConstraintChecker[F],
+      lastFinalizedHeightConstraintChecker: LastFinalizedHeightConstraintChecker[F],
+      blockDagStorage: BlockDagStorage[F]
   ): APIServers = {
     implicit val s: Scheduler = scheduler
     val repl                  = ReplGrpcService.instance(runtime, s)
