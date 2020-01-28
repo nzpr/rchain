@@ -11,6 +11,7 @@ import coop.rchain.catscontrib.ListContrib
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.shared.Log
 import coop.rchain.metrics.Metrics
+import coop.rchain.models.BlockHash
 
 final class LastFinalizedBlockCalculator[F[_]: Sync: Log: Concurrent: BlockStore: BlockDagStorage: SafetyOracle: DeployStorage: Metrics](
     faultToleranceThreshold: Float
@@ -19,12 +20,21 @@ final class LastFinalizedBlockCalculator[F[_]: Sync: Log: Concurrent: BlockStore
   implicit private val metricsSource: Metrics.Source =
     Metrics.Source(Metrics.BaseSource, "last-finalized-block-calculator")
 
+  def sortByHash(b1: BlockHash, b2: BlockHash) =
+    BlockHash.BlockHashOps(b1).base16String > BlockHash.BlockHashOps(b2).base16String
+
   def run(dag: BlockDagRepresentation[F], lastFinalizedBlockHash: BlockHash)(
       implicit state: CasperStateCell[F]
   ): F[BlockHash] =
     for {
       maybeChildrenHashes <- dag.children(lastFinalizedBlockHash)
-      childrenHashes      = maybeChildrenHashes.getOrElse(Set.empty[BlockHash]).toList
+      childrenHashes = maybeChildrenHashes
+        .getOrElse(Set.empty[BlockHash])
+        .toList
+        // we sort children by block hash after converting sort to List
+        // to be sure that all validators pick the same lastFinalizedBlock
+        // when multiple children satisfy isGreaterThanFaultToleranceThreshold
+        .sortWith(sortByHash)
       maybeFinalizedChild <- childrenHashes.findM(isGreaterThanFaultToleranceThreshold(dag, _))
       newFinalizedBlock <- maybeFinalizedChild match {
                             case Some(finalizedChild) =>
