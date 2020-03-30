@@ -2,10 +2,10 @@ package coop.rchain.lmdb
 
 import java.nio.ByteBuffer
 
-import cats.implicits._
 import cats.effect.Sync
+import cats.syntax.all._
 import coop.rchain.shared.Resources.withResource
-import org.lmdbjava.{CursorIterator, Dbi, Env, Txn}
+import org.lmdbjava.{CursorIterator, Dbi, Env, Stat, Txn}
 
 import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
@@ -41,6 +41,11 @@ final case class LMDBStore[F[_]: Sync](env: Env[ByteBuffer], dbi: Dbi[ByteBuffer
     withReadTxnF { txn =>
       dbi.get(txn, key)
     }.map(v => Option(v))
+
+  def get[T](keys: Seq[ByteBuffer], f: ByteBuffer => T): F[Seq[Option[T]]] =
+    withReadTxnF { txn =>
+      keys.map(x => Option(dbi.get(txn, x)).map(f))
+    }
 
   @SuppressWarnings(Array("org.wartremover.warts.Throw"))
   def put(key: ByteBuffer, value: ByteBuffer): F[Unit] =
@@ -84,4 +89,7 @@ final case class LMDBStore[F[_]: Sync](env: Env[ByteBuffer], dbi: Dbi[ByteBuffer
     Sync[F].delay {
       env.close()
     }
+
+  def stat: F[Stat] =
+    withReadTxnF(dbi.stat)
 }
