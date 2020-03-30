@@ -3,11 +3,11 @@ package coop.rchain.rspace.history
 import java.nio.ByteBuffer
 import java.nio.file.Path
 
-import cats.implicits._
 import cats.effect.Sync
+import cats.syntax.all._
 import coop.rchain.lmdb.LMDBStore
-import coop.rchain.shared.ByteVectorOps.RichByteVector
 import coop.rchain.rspace.Blake2b256Hash
+import coop.rchain.shared.ByteVectorOps.RichByteVector
 import org.lmdbjava.DbiFlags.MDB_CREATE
 import org.lmdbjava.{Env, EnvFlags, Txn}
 import scodec.bits.BitVector
@@ -19,6 +19,10 @@ trait Store[F[_]] {
   def put(key: ByteBuffer, value: ByteBuffer): F[Unit]
   def put(data: Seq[(Blake2b256Hash, BitVector)]): F[Unit]
   def close(): F[Unit]
+  // Bulk access to raw values
+  def get[Value](key: Seq[Blake2b256Hash], fromBuffer: ByteBuffer => Value): F[Seq[Option[Value]]]
+  // Store status / entries
+  def status: F[Status]
 }
 
 final case class StoreConfig(
@@ -27,6 +31,15 @@ final case class StoreConfig(
     maxDbs: Int = 2,
     maxReaders: Int = 2048,
     flags: List[EnvFlags] = List(EnvFlags.MDB_NOTLS)
+)
+
+final case class Status(
+    entries: Long,
+    pageSize: Int,
+    depth: Int,
+    branchPages: Long,
+    leafPages: Long,
+    overflowPages: Long
 )
 
 object StoreInstances {
@@ -46,6 +59,14 @@ object StoreInstances {
       override def get(key: Blake2b256Hash): F[Option[BitVector]] = {
         val directKey = key.bytes.toDirectByteBuffer
         get(directKey).map(v => v.map(BitVector(_)))
+      }
+
+      override def get[T](
+          keys: Seq[Blake2b256Hash],
+          fromBuffer: ByteBuffer => T
+      ): F[Seq[Option[T]]] = {
+        val rawKeys = keys.map(_.bytes.toDirectByteBuffer)
+        store.get(rawKeys, fromBuffer)
       }
 
       override def put(key: Blake2b256Hash, value: BitVector): F[Unit] = {
@@ -83,5 +104,10 @@ object StoreInstances {
       }
 
       override def close(): F[Unit] = store.close()
+
+      override def status: F[Status] =
+        store.stat.map { s =>
+          Status(s.entries, s.pageSize, s.depth, s.branchPages, s.leafPages, s.overflowPages)
+        }
     }
 }
