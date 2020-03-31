@@ -44,6 +44,7 @@ import coop.rchain.node.diagnostics._
 import coop.rchain.node.diagnostics.Trace.TraceId
 import coop.rchain.node.effects.{EventConsumer, RchainEvents}
 import coop.rchain.node.model.repl.ReplGrpcMonix
+import coop.rchain.node.state.RNodeStateManagerImpl
 import coop.rchain.node.web._
 import coop.rchain.p2p.effects._
 import coop.rchain.rholang.interpreter.Runtime
@@ -734,7 +735,7 @@ object NodeRuntime {
         }
       }
       _ <- Runtime.bootstrapRegistry[F](evalRuntime)
-      casperRuntimeAndReporter <- {
+      casperInitialized <- {
         implicit val s  = rspaceScheduler
         implicit val sp = span
         implicit val bs = blockStore
@@ -747,9 +748,9 @@ object NodeRuntime {
             ReportingCasper.rhoReporter(hr)
           else
             ReportingCasper.noop
-        } yield (runtime, reporter)
+        } yield (runtime, reporter, hr)
       }
-      (casperRuntime, reportingCasper) = casperRuntimeAndReporter
+      (casperRuntime, reportingCasper, historyRepo) = casperInitialized
       runtimeManager <- {
         implicit val sp = span
         RuntimeManager.fromRuntime[F](casperRuntime)
@@ -839,12 +840,15 @@ object NodeRuntime {
       }
       engineInit     = engineCell.read >>= (_.init)
       runtimeCleanup = NodeRuntime.cleanup(evalRuntime, casperRuntime, deployStorageCleanup)
-      webApi = {
+      webApi <- {
         implicit val ec = engineCell
         implicit val sp = span
         implicit val or = oracle
         implicit val bs = blockStore
-        new WebApiImpl[F](conf.server.apiMaxBlocksLimit)
+        for {
+          exporter <- historyRepo.exporter
+          manager  = RNodeStateManagerImpl[F](exporter)
+        } yield new WebApiImpl[F](conf.server.apiMaxBlocksLimit, manager)
       }
     } yield (
       blockStore,
