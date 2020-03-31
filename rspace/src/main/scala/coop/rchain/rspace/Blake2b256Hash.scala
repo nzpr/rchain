@@ -20,7 +20,7 @@ class Blake2b256Hash private (val bytes: ByteVector) {
     s"Expected ${Blake2b256Hash.length} but got ${bytes.length}"
   )
 
-  override def toString: String = s"Blake2b256Hash(bytes: ${bytes.toString})"
+  override def toString: String = s"Blake(${bytes.toHex.take(8)})"
 
   override def equals(obj: scala.Any): Boolean = obj match {
     case b: Blake2b256Hash => b.bytes === bytes

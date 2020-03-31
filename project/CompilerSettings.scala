@@ -43,11 +43,11 @@ object CompilerSettings {
           // compatibility for Scala versions < 2.12
           Seq(
             "-Xlint:-unused,-adapted-args,-inaccessible,_",
-            "-Ywarn-unused:implicits",
-            "-Ywarn-macros:after",
-            "-Ywarn-unused:locals",
-            "-Ywarn-unused:patvars",
-            "-Ywarn-unused:privates"
+//            "-Ywarn-unused:implicits",
+//            "-Ywarn-macros:after",
+//            "-Ywarn-unused:locals",
+//            "-Ywarn-unused:patvars",
+//            "-Ywarn-unused:privates"
           )
         case _ =>
           Seq(
