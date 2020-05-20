@@ -1,4 +1,4 @@
-package coop.rchain.casper.util
+package coop.rchain.blockstorage.util
 
 import coop.rchain.models.BlockHash.BlockHash
 
