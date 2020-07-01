@@ -53,7 +53,8 @@ object Running {
       _ <- engine.withCasper(
             casper => {
               for {
-                tip          <- MultiParentCasper.forkChoiceTip[F](casper)
+                tipHash      <- MultiParentCasper.forkChoiceTip[F](casper)
+                tip          <- BlockStore[F].getUnsafe(tipHash)
                 tipTimestamp = tip.header.timestamp
                 now          <- Time[F].currentMillis
                 expired      = (now - tipTimestamp) > delayThreshold.toMillis
@@ -241,13 +242,13 @@ object Running {
       peer: PeerNode
   )(casper: MultiParentCasper[F]): F[Unit] = {
     val logRequestedTip = Log[F].info(s"Received ForkChoiceTipRequest from ${peer.endpoint.host}")
-    def logStreamingBlock(block: BlockMessage) =
+    def logStreamingBlock(blockHash: BlockHash) =
       Log[F].info(
-        s"Streaming block ${PrettyPrinter.buildString(block.blockHash)} to ${peer.endpoint.host}"
+        s"Streaming block ${PrettyPrinter.buildString(blockHash)} to ${peer.endpoint.host}"
       )
     val getTip = MultiParentCasper.forkChoiceTip(casper)
-    def streamToPears(tip: BlockMessage) =
-      logStreamingBlock(tip) >> TransportLayer[F].streamToPeer(peer, ToPacket(tip.toProto))
+    def streamToPears(tip: BlockHash) =
+      logStreamingBlock(tip) >> TransportLayer[F].sendToPeer(peer, HasBlockProto(tip))
 
     logRequestedTip >> getTip >>= streamToPears
   }
