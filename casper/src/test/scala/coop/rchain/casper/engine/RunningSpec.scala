@@ -100,7 +100,7 @@ class RunningSpec extends WordSpec {
         head = transportLayer.requests.head
         _    = assert(head.peer == local)
         _ = assert(
-          head.msg.message.packet.get == ToPacket(tip.toProto)
+          head.msg.message.packet.get == ToPacket(HasBlockProto(tip))
         )
       } yield ()
 
