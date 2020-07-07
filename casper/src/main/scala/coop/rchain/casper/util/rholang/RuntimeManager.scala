@@ -448,7 +448,7 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
 
   private def processDeploy(runtime: Runtime[F])(
       deploy: Signed[DeployData]
-  ): F[ProcessedDeploy] = Span[F].withMarks("process-deploy") {
+  ): F[ProcessedDeploy] =
     for {
       fallback                     <- runtime.space.createSoftCheckpoint()
       evaluateResult               <- evaluate(runtime.reducer, runtime.cost)(deploy)
@@ -464,7 +464,6 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
       _ <- if (errors.nonEmpty) runtime.space.revertToSoftCheckpoint(fallback)
           else Applicative[F].unit
     } yield deployResult
-  }
 
   private def replayDeploys(
       runtime: Runtime[F],
@@ -630,37 +629,35 @@ class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log](
         )
       } else deployEvaluator.map(_.succeeded)
 
-    Span[F].withMarks("replay-deploy") {
-      for {
-        _ <- runtime.replaySpace.rig(processedDeploy.deployLog.map(EventConverter.toRspaceEvent))
-        _ <- Span[F].mark("before-replay-deploy-compute-effect")
-        failureOption <- evaluatorT
-                          .flatMap { succeeded =>
-                            /* This deployment represents either correct program `Some(result)`,
+    for {
+      _ <- runtime.replaySpace.rig(processedDeploy.deployLog.map(EventConverter.toRspaceEvent))
+      _ <- Span[F].mark("before-replay-deploy-compute-effect")
+      failureOption <- evaluatorT
+                        .flatMap { succeeded =>
+                          /* This deployment represents either correct program `Some(result)`,
                               or we have a failed pre-charge (`None`) but we agree on that it failed.
                               In both cases we want to check reply data and see if everything is in order */
-                            runtime.replaySpace
-                              .checkReplayData()
-                              .attemptT
-                              .leftMap {
-                                case replayException: ReplayException =>
-                                  ReplayFailure.unusedCOMMEvent(replayException)
-                                case throwable => ReplayFailure.internalError(throwable)
-                              }
-                              .leftFlatMap {
-                                case UnusedCOMMEvent(_) if !succeeded =>
-                                  // TODO: temp fix for replay error mismatch
-                                  // https://rchain.atlassian.net/browse/RCHAIN-3505
-                                  EitherT.rightT[F, ReplayFailure](())
-                                case ex: ReplayFailure => EitherT.leftT[F, Unit](ex)
-                              }
-                          }
-                          .swap
-                          .value
-                          .map(_.toOption)
+                          runtime.replaySpace
+                            .checkReplayData()
+                            .attemptT
+                            .leftMap {
+                              case replayException: ReplayException =>
+                                ReplayFailure.unusedCOMMEvent(replayException)
+                              case throwable => ReplayFailure.internalError(throwable)
+                            }
+                            .leftFlatMap {
+                              case UnusedCOMMEvent(_) if !succeeded =>
+                                // TODO: temp fix for replay error mismatch
+                                // https://rchain.atlassian.net/browse/RCHAIN-3505
+                                EitherT.rightT[F, ReplayFailure](())
+                              case ex: ReplayFailure => EitherT.leftT[F, Unit](ex)
+                            }
+                        }
+                        .swap
+                        .value
+                        .map(_.toOption)
 
-      } yield failureOption
-    }
+    } yield failureOption
   }
 
   // Return channel on which result is captured is the first name
