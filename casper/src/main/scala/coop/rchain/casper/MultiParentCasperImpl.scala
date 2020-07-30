@@ -248,7 +248,7 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
                        )
                  } yield result
                }
-    } yield result
+    } yield result //ffdfdfd
   }.timer("add-block-time")
 
   private def updateLastFinalizedBlock(newBlock: BlockMessage): F[Unit] =
