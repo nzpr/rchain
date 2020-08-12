@@ -30,18 +30,11 @@ object BlockCreator {
   private[this] val ProcessDeploysAndCreateBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "process-deploys-and-create-block")
 
-  private def isActiveValidator[F[_]: Sync](
+  private def getActiveValidators[F[_]: Sync](
       block: BlockMessage,
-      runtimeManager: RuntimeManager[F],
-      validatorId: ValidatorIdentity
-  ): F[Boolean] = {
-    val lastProposedTuplespace = ProtoUtil.postStateHash(block)
-    for {
-      activeValidators <- runtimeManager.getActiveValidators(lastProposedTuplespace)
-      validator        = ByteString.copyFrom(validatorId.publicKey.bytes)
-      isActive         = activeValidators.contains(validator)
-    } yield isActive
-  }
+      runtimeManager: RuntimeManager[F]
+  ): F[Seq[Validator]] =
+    runtimeManager.getActiveValidators(ProtoUtil.postStateHash(block))
 
   private def isBonded[F[_]: Sync](
       blockMeta: BlockMetadata,
@@ -105,10 +98,10 @@ object BlockCreator {
         // If one validator issue a bonding or unbonding request , it would be possible to end up with
         // parent in 1 situation. It would be safer for the validator to make sure all parents post state
         // are in active state.
-        isActive = parents
-          .traverse(b => isActiveValidator(b, runtimeManager, validatorIdentity))
-          .map(_.forall(identity))
-        justifications   <- computeJustifications(dag, parents)
+        activeValidators <- getActiveValidators(parents.head, runtimeManager)
+        validator        = ByteString.copyFrom(validatorIdentity.publicKey.bytes)
+        isActive         = activeValidators.contains(validator).pure[F]
+        justifications   <- computeJustifications(dag, activeValidators)
         now              <- Time[F].currentMillis
         invalidBlocksSet <- dag.invalidBlocks
         invalidBlocks    = invalidBlocksSet.map(block => (block.blockHash, block.sender)).toMap
@@ -190,14 +183,12 @@ object BlockCreator {
    */
   private def computeJustifications[F[_]: Sync](
       dag: BlockDagRepresentation[F],
-      parents: Seq[BlockMessage]
-  ): F[Seq[Justification]] = {
-    val bondedValidators = bonds(parents.head).map(_.validator).toSet
+      activeValidators: Seq[Validator]
+  ): F[Seq[Justification]] =
     dag.latestMessages.map { latestMessages =>
       toJustification(latestMessages)
-        .filter(j => bondedValidators.contains(j.validator))
+        .filter(j => activeValidators.contains(j.validator))
     }
-  }
 
   private def processDeploysAndCreateBlock[F[_]: Sync: Log: BlockStore: Metrics](
       dag: BlockDagRepresentation[F],

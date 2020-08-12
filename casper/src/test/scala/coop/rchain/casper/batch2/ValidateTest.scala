@@ -553,7 +553,8 @@ class ValidateTest
               getRandomBlock(hashF = (ProtoUtil.hashUnsignedBlock _).some),
               dag,
               "root",
-              Int.MaxValue
+              Int.MaxValue,
+              Seq.empty
             ) shouldBeF Left(InvalidBlockNumber)
         result = log.warns.size should be(1)
       } yield result
@@ -561,11 +562,14 @@ class ValidateTest
 
   "Justification follow validation" should "return valid for proper justifications and failed otherwise" in withStorage {
     implicit blockStore => implicit blockDagStorage =>
-      val v1     = generateValidator("Validator One")
-      val v2     = generateValidator("Validator Two")
-      val v1Bond = Bond(v1, 2)
-      val v2Bond = Bond(v2, 3)
-      val bonds  = Seq(v1Bond, v2Bond)
+      val v1      = generateValidator("Validator One")
+      val v2      = generateValidator("Validator Two")
+      val v3      = generateValidator("Validator Three")
+      val v1Bond  = Bond(v1, 2)
+      val v2Bond  = Bond(v2, 3)
+      val v3Bond  = Bond(v3, 4)
+      val bonds   = Seq(v1Bond, v2Bond, v3Bond)
+      val actives = Seq(v1Bond, v2Bond)
 
       for {
         genesis <- createGenesis[Task](bonds = bonds)
@@ -621,21 +625,18 @@ class ValidateTest
         _ <- (1 to 6).toList.forallM[Task](
               i =>
                 for {
+                  _     <- println(i).pure[Task]
                   block <- blockDagStorage.lookupByIdUnsafe(i)
-                  dag   <- blockDagStorage.getRepresentation
                   result <- Validate.justificationFollows[Task](
                              block,
-                             genesis,
-                             dag
+                             actives.map(_.validator)
                            )
                 } yield result == Right(Valid)
             ) shouldBeF true
         blockId7 <- blockDagStorage.lookupByIdUnsafe(7)
-        dag      <- blockDagStorage.getRepresentation
         _ <- Validate.justificationFollows[Task](
               blockId7,
-              genesis,
-              dag
+              bonds.map(_.validator)
             ) shouldBeF Left(InvalidFollows)
         _      = log.warns.size shouldBe 1
         result = log.warns.forall(_.contains("do not match the bonded validators")) shouldBe true

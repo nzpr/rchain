@@ -163,7 +163,8 @@ object Validate {
       genesis: BlockMessage,
       dag: BlockDagRepresentation[F],
       shardId: String,
-      expirationThreshold: Int
+      expirationThreshold: Int,
+      activeValidators: Seq[Validator]
   ): F[ValidBlockProcessing] =
     (for {
       _ <- EitherT.liftF(Span[F].mark("before-block-hash-validation"))
@@ -181,7 +182,7 @@ object Validate {
       _ <- EitherT.liftF(Span[F].mark("before-transaction-expired-validation"))
       _ <- EitherT(Validate.transactionExpiration(block, expirationThreshold))
       _ <- EitherT.liftF(Span[F].mark("before-justification-follows-validation"))
-      _ <- EitherT(Validate.justificationFollows(block, genesis, dag))
+      _ <- EitherT(Validate.justificationFollows(block, activeValidators))
       _ <- EitherT.liftF(Span[F].mark("before-parents-validation"))
       _ <- EitherT(Validate.parents(block, genesis, dag))
       _ <- EitherT.liftF(Span[F].mark("before-sequence-number-validation"))
@@ -520,24 +521,20 @@ object Validate {
    */
   def justificationFollows[F[_]: Sync: Log: BlockStore](
       b: BlockMessage,
-      genesis: BlockMessage,
-      dag: BlockDagRepresentation[F]
+      activeValidators: Seq[Validator]
   ): F[ValidBlockProcessing] = {
     val justifiedValidators = b.justifications.map(_.validator).toSet
-    val mainParentHash      = ProtoUtil.parentHashes(b).head
     for {
-      mainParent       <- BlockStore[F].getUnsafe(mainParentHash)
-      bondedValidators = ProtoUtil.bonds(mainParent).map(_.validator).toSet
-      status <- if (bondedValidators == justifiedValidators) {
+      status <- if (activeValidators.toSet == justifiedValidators) {
                  BlockStatus.valid.asRight[BlockError].pure
                } else {
                  val justifiedValidatorsPP = justifiedValidators.map(PrettyPrinter.buildString)
-                 val bondedValidatorsPP    = bondedValidators.map(PrettyPrinter.buildString)
+                 val activeValidatorsPP    = activeValidators.map(PrettyPrinter.buildString)
                  for {
                    _ <- Log[F].warn(
                          ignore(
                            b,
-                           s"the justified validators, ${justifiedValidatorsPP}, do not match the bonded validators, ${bondedValidatorsPP}."
+                           s"the justified validators, ${justifiedValidatorsPP}, do not match the bonded validators, ${activeValidatorsPP}."
                          )
                        )
                  } yield BlockStatus.invalidFollows.asLeft[ValidBlock]
