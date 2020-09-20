@@ -253,11 +253,11 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
                           } yield !missingDep
                         }
       enqueued <- BlockRetriever[F].getEnqueuedToCasper
-      all      = depFreePendants ++ enqueued
+      all      = depFreePendants // ++ enqueued
       _ <- Log[F].info(
             s"Blocks ready to be added: " +
               s"dependency free buffer pendants ${PrettyPrinter.buildString(depFreePendants)}, " +
-              s"enqueued to Casper ${PrettyPrinter.buildString(enqueued)}"
+              " " // s"enqueued to Casper ${PrettyPrinter.buildString(enqueued)}"
           )
     } yield all.headOption
   }
