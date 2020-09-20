@@ -13,7 +13,7 @@ import coop.rchain.casper.util.ProtoUtil._
 import coop.rchain.casper.util.rholang.RuntimeManager.StateHash
 import coop.rchain.casper.util.rholang.costacc.{CloseBlockDeploy, SlashDeploy}
 import coop.rchain.casper.util.rholang.{SystemDeploy, _}
-import coop.rchain.casper.util.{DagOperations, ProtoUtil}
+import coop.rchain.casper.util.{ConstructDeploy, DagOperations, ProtoUtil}
 import coop.rchain.crypto.{PrivateKey, PublicKey}
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.metrics.{Metrics, Span}
@@ -190,14 +190,22 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
                   _ <- Log[F].info(
                         s"Creating block with seqNum ${blockSeqNum} and maxBlockNumber ${maxBlockNumber}."
                       )
-                  deploys <- prepareDeploys(
-                              parentMetadatas,
-                              blockSeqNum,
-                              maxBlockNumber,
-                              shardConfig.deployLifespan
-                            )
-                  (userDeploys, slashingDeploys) = deploys
-                  r <- if (userDeploys.nonEmpty || slashingDeploys.nonEmpty) {
+                  d <- prepareDeploys(
+                        parentMetadatas,
+                        blockSeqNum,
+                        maxBlockNumber,
+                        shardConfig.deployLifespan
+                      )
+                  (userDeploys, slashingDeploys) = d
+                  deploys = (if (dummyDeployerPrivateKey.nonEmpty)
+                               userDeploys :+ ConstructDeploy.sourceDeploy(
+                                 source = "Nil",
+                                 timestamp = System.currentTimeMillis(),
+                                 sec = dummyDeployerPrivateKey.get,
+                                 validAfterBlockNumber = maxBlockNumber
+                               )
+                             else userDeploys)
+                  r <- if (deploys.nonEmpty || slashingDeploys.nonEmpty) {
                         makeSignedBlock(
                           parents,
                           blockSeqNum,
