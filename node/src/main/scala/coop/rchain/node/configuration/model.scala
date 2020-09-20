@@ -24,6 +24,8 @@ final case class NodeConf(
     storage: Storage,
     casper: CasperConf,
     metrics: Metrics,
+    devMode: Boolean,
+    dev: DevConf,
     // This field is dynamic and computed according to profile and is not used directly in client code.
     // But it is required in the model because of how Pureconfig works and how config file is structured (there are
     // references to this key in `defaults.conf`).
@@ -97,6 +99,10 @@ final case class Metrics(
     influxdbUdp: Boolean,
     zipkin: Boolean,
     sigar: Boolean
+)
+
+final case class DevConf(
+    deployerPrivateKey: Option[String]
 )
 
 sealed trait Command

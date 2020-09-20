@@ -44,15 +44,7 @@ class GenesisCeremonyMaster[F[_]: Sync: BlockStore: CommUtil: TransportLayer: RP
 // format: off
 object GenesisCeremonyMaster {
   import Engine._
-  def waitingForApprovedBlockLoop[F[_]
-    /* Execution */   : Concurrent: Time
-    /* Transport */   : TransportLayer: CommUtil: BlockRetriever: EventPublisher
-    /* State */       : EngineCell: RPConfAsk: ConnectionsCell: LastApprovedBlock
-    /* Rholang */     : RuntimeManager
-    /* Casper */      : Estimator: SafetyOracle: LastFinalizedBlockCalculator: LastFinalizedHeightConstraintChecker: SynchronyConstraintChecker
-    /* Storage */     : BlockStore: BlockDagStorage: LastFinalizedStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
-    /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
-  (
+  def waitingForApprovedBlockLoop[F[_]: Sync: Metrics: Span: Concurrent: CommUtil: TransportLayer: ConnectionsCell: RPConfAsk: BlockRetriever: BlockStore: Log: EventLog: Time: SafetyOracle: LastFinalizedBlockCalculator: LastApprovedBlock: BlockDagStorage: LastFinalizedStorage: EngineCell: RuntimeManager: EventPublisher: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: Estimator: DeployStorage: CasperBufferStorage: BlockCreator](
       shardId: String,
       finalizationRate: Int,
       validatorId: Option[ValidatorIdentity],

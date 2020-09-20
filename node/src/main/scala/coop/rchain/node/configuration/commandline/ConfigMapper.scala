@@ -121,6 +121,10 @@ object ConfigMapper {
       add("metrics.influxdb-udp", run.influxdbUdp)
       add("metrics.zipkin", run.zipkin)
       add("metrics.sigar", run.sigar)
+
+      add("dev-mode", run.devMode)
+      add("dev.deployer-private-key", run.deployerPrivateKey)
+
       //TODO remove
       //add(keys.KnownValidatorsFile, run.knownValidators
     }

@@ -532,6 +532,14 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
       descr = "Timestamp for the deploys."
     )
 
+    // Dev mode options
+    val devMode = opt[Flag](
+      descr = "Enable all developer tools."
+    )
+
+    val deployerPrivateKey = opt[String](
+      descr = "Private key for dummy deploys."
+    )
   }
   addSubcommand(run)
 
