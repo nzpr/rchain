@@ -24,13 +24,13 @@ import coop.rchain.rholang.interpreter.Runtime.BlockData
 import coop.rchain.shared.{Cell, Log, Time}
 import coop.rchain.casper.util.rholang.SystemDeployUtil
 
-final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics](
-    dummyDeployerPrivateKey: Option[PrivateKey]
+final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
+    dummyDeployerPrivateKey: Option[PrivateKey] = None
 ) {
   private[this] val CreateBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "create-block")
   private[this] val ProcessDeploysAndCreateBlockMetricsSource =
-    Metrics.Source(CasperMetricsSource, "process-deploys-and-create-block")
+    Metrics.Source(CasperMetricsSource, "process-deploys-and-create-bloc")
 
   private def isActiveValidator(
       block: BlockMessage,
@@ -62,7 +62,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
    *  3. Extract all valid deploys that aren't already in all ancestors of S (the parents).
    *  4. Create a new block that contains the deploys from the previous step.
    */
-  def createBlock[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: BlockCreator](
+  def createBlock(
       dag: BlockDagRepresentation[F],
       genesis: BlockMessage,
       validatorIdentity: ValidatorIdentity,

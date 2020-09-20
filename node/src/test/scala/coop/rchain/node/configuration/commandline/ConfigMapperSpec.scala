@@ -7,6 +7,7 @@ import coop.rchain.casper.{CasperConf, GenesisBlockData, GenesisCeremonyConf, Ro
 import coop.rchain.comm.{CommError, PeerNode}
 import coop.rchain.node.configuration.{
   ApiServer,
+  DevConf,
   Metrics,
   NodeConf,
   PeersDiscovery,
@@ -107,7 +108,9 @@ class ConfigMapperSpec extends FunSuite with Matchers {
         "--influxdb",
         "--influxdb-udp",
         "--zipkin",
-        "--sigar"
+        "--sigar",
+        "--dev-mode",
+        "--deployer-private-key somerandonmprivatekey"
       ).mkString(" ")
 
     val options = Options(args.split(' '))
@@ -253,7 +256,9 @@ class ConfigMapperSpec extends FunSuite with Matchers {
         influxdbUdp = true,
         zipkin = true,
         sigar = true
-      )
+      ),
+      devMode = true,
+      dev = DevConf(deployerPrivateKey = Some("somerandonmprivatekey"))
     )
     config shouldEqual expectedConfig
   }
