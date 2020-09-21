@@ -115,11 +115,11 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
     def addNextReady: F[Unit] =
       for {
         hash <- getNextReadyBlock
-        _ <- Log[F].info(
-              s"Next block ready for processing ${PrettyPrinter.buildString(b, short = true)}."
-            )
         _ <- Applicative[F].whenA(hash.isDefined)(
-              addBlockFromStore(hash.get, allowAddFromBuffer = true)
+              Log[F].info(
+                s"Next block ready for processing ${PrettyPrinter.buildString(hash.get)}."
+              ) >>
+                addBlockFromStore(hash.get, allowAddFromBuffer = true)
             )
       } yield ()
 
@@ -129,39 +129,26 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
       // TODO remove this and rewrite failing tests
       _         <- BlockStore[F].contains(b.blockHash).ifM(().pure[F], BlockStore[F].put(b))
       shardConf <- shardConfigMap.get(ProtoUtil.postStateHash(b))
-      // We force Casper to be single threaded. More investigations needed to allow it be multi threaded.
-      addResult <- Sync[F].bracket(blockProcessingLock.tryAcquire) {
-                    case true =>
-                      for {
-                        _ <- blocksInProcessing.update(_ + b.blockHash)
-                        _ <- Log[F].info(
-                              s"Block ${PrettyPrinter.buildString(b, short = true)} got blockProcessingLock."
-                            )
-                        r <- addBlockInLock(b, allowAddFromBuffer, shardConf)
-                        _ <- BlockRetriever[F].ackInCasper(b.blockHash)
-                        _ <- Log[F].debug("Trying to create block")
-                        _ <- createBlock
-                      } yield r
-
-                    case false =>
-                      Log[F]
-                        .info(
-                          s"Block ${PrettyPrinter.buildString(b, short = true)} " +
-                            s"processing deferred as Casper is busy."
+      // We force Casper to be single t hreaded. More investigations needed to allow it be multi threaded.
+      addResult <- for {
+                    hashInProcess <- blocksInProcessing.modify(
+                                     cur => ((cur + b.blockHash), cur.contains(b.blockHash))
+                                   )
+                    _ <- Log[F].info(
+                          s"Block ${PrettyPrinter.buildString(b, short = true)} start processing."
                         )
-                        .as(BlockStatus.casperIsBusy.asLeft[ValidBlock])
-                  } {
-                    case true =>
-                      blockProcessingLock.release >>
-                        Log[F].info(
-                          s"Block ${PrettyPrinter.buildString(b, short = true)} released blockProcessingLock."
-                        ) >> blocksInProcessing.update(_ - b.blockHash)
-                    case false =>
-                      ().pure[F]
-                  }
-      _ <- casperBuffer
-            .remove(b.blockHash)
-            .unlessA(addResult equals BlockStatus.casperIsBusy.asLeft[ValidBlock])
+                    r <- if (!hashInProcess) addBlockInLock(b, allowAddFromBuffer, shardConf)
+                        else BlockStatus.processed.asLeft[ValidBlock].pure[F]
+                    _ <- BlockRetriever[F].ackInCasper(b.blockHash)
+                  } yield r
+      _ <- casperBuffer.remove(b.blockHash)
+
+      _ <- Log[F].info(
+        s"Block ${PrettyPrinter.buildString(b, short = true)} processed."
+      ) >>
+        Log[F].debug("Trying to create block") >> createBlock >> blocksInProcessing
+        .update(_ - b.blockHash)
+
       _ <- addResult match {
             case Right(_) =>
               for {
