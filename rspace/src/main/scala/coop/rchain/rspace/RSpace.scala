@@ -237,9 +237,9 @@ class RSpace[F[_], C, P, A, K](
     val historyRep = historyRepositoryAtom.get()
     for {
       nextHistory <- historyRep.reset(historyRep.history.root)
-      //hotStore    <- createNewHotStore(nextHistory)(serializeK.toCodec)
-      _ <- restoreInstalls()
-    } yield new RSpace[F, C, P, A, K](nextHistory, storeAtom, branch)
+      hotStore    <- newHotStore(nextHistory)(serializeK.toCodec)
+      _           <- restoreInstalls()
+    } yield new RSpace[F, C, P, A, K](nextHistory, AtomicAny(hotStore), branch)
   }
 }
 

@@ -42,6 +42,9 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
       activeValidators <- runtimeManager.getActiveValidators(lastProposedTuplespace)
       validator        = ByteString.copyFrom(validatorId.publicKey.bytes)
       isActive         = activeValidators.contains(validator)
+      _ <- Log[F].debug(
+            s"${PrettyPrinter.buildString(ByteString.copyFrom(validatorId.privateKey.bytes))} is $isActive"
+          )
     } yield isActive
   }
 
@@ -149,6 +152,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
           .as(CreateBlockStatus.tooFarAheadOfLastFinalized)
 
       for {
+        _ <- Log[F].debug("Trying to create block")
         // Note: Estimator[F].tips returns sequence sorted by sender weight
         tipHashes       <- Estimator[F].tips(dag, genesis)
         _               <- spanF.mark("after-estimator")
@@ -199,7 +203,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
                   (userDeploys, slashingDeploys) = d
                   deploys = (if (dummyDeployerPrivateKey.nonEmpty)
                                userDeploys :+ ConstructDeploy.sourceDeploy(
-                                 source = "Nil",
+                                 source = "@0!(0)",
                                  timestamp = System.currentTimeMillis(),
                                  sec = dummyDeployerPrivateKey.get,
                                  validAfterBlockNumber = maxBlockNumber
@@ -210,7 +214,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
                           parents,
                           blockSeqNum,
                           maxBlockNumber,
-                          userDeploys,
+                          deploys,
                           slashingDeploys :+ CloseBlockDeploy(
                             SystemDeployUtil
                               .generateCloseDeployRandomSeed(selfId, blockSeqNum)

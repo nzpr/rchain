@@ -319,6 +319,7 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
 
   override def reset(root: Blake2b256Hash): F[Unit] = spanF.trace(resetSpanLabel) {
     for {
+      _           <- Log[F].info(s"resetting to hash ")
       nextHistory <- historyRepositoryAtom.get().reset(root)
       _           = historyRepositoryAtom.set(nextHistory)
       _           = eventLog.take()
@@ -339,6 +340,13 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       nextHotStore <- HotStore.empty(historyReader)
       _            = storeAtom.set(nextHotStore)
     } yield ()
+
+  protected def newHotStore(
+      historyReader: HistoryReader[F, C, P, A, K]
+  )(implicit ck: Codec[K]): F[HotStore[F, C, P, A, K]] =
+    for {
+      nextHotStore <- HotStore.empty(historyReader)
+    } yield nextHotStore
 
   override def createSoftCheckpoint(): F[SoftCheckpoint[C, P, A, K]] =
     /*spanF.trace(createSoftCheckpointSpanLabel) */

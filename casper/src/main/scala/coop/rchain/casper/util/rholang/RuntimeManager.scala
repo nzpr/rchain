@@ -8,7 +8,7 @@ import cats.effect.concurrent.MVar
 import cats.effect.{Sync, _}
 import cats.syntax.all._
 import com.google.protobuf.ByteString
-import coop.rchain.casper.{CasperMetricsSource, CasperShardConf}
+import coop.rchain.casper.{CasperMetricsSource, CasperShardConf, PrettyPrinter}
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.util.rholang.RuntimeManager.{evaluate, RuntimeConf, StateHash}
 import SystemDeployPlatformFailure._
@@ -302,6 +302,10 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     withRuntime { runtime =>
       Span[F].trace(computeStateLabel) {
         for {
+          _ <- Log[F].info(
+                s"Computing postStateHah for play, preStateHash = ${PrettyPrinter
+                  .buildString(startHash)}, system deploys num: ${systemDeploys.size}"
+              )
           _ <- runtime.blockData.set(blockData)
           _ <- setInvalidBlocks(invalidBlocks, runtime)
           _ <- Span[F].mark("before-process-deploys")
@@ -309,7 +313,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
                                   runtime,
                                   startHash,
                                   terms,
-                                  processDeployWithCostAccounting(runtime)
+                                  processDeploy(runtime)
                                 )
           (startHash, processedDeploys) = deployProcessResult
           systemDeployProcessResult <- {
@@ -359,6 +363,10 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     withRuntime { runtime =>
       Span[F].trace(replayComputeStateLabel) {
         for {
+          _ <- Log[F].info(
+                s"Computing postStateHah for replay, preStateHash = ${PrettyPrinter
+                  .buildString(startHash)}, system deploys num: ${systemDeploys.size}"
+              )
           _ <- runtime.blockData.set(blockData)
           _ <- setInvalidBlocks(invalidBlocks, runtime)
           _ <- Span[F].mark("before-replay-deploys")
@@ -367,7 +375,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
                      startHash,
                      terms,
                      systemDeploys,
-                     replayDeploy(runtime, withCostAccounting = !isGenesis),
+                     replayDeploy(runtime, withCostAccounting = false /*!isGenesis*/ ),
                      replaySystemDeploy(runtime, blockData)
                    )
         } yield result
@@ -384,6 +392,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
 
     for {
       _               <- runtime.space.reset(Blake2b256Hash.fromByteString(startHash))
+      _               <- Log[F].info(s"terms ${terms.size}, term ${terms.head.data.term}")
       res             <- terms.toList.traverse(processDeploy)
       _               <- Span[F].mark("before-process-deploys-create-checkpoint")
       finalCheckpoint <- runtime.space.createCheckpoint()
@@ -391,7 +400,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     } yield (finalStateHash.toByteString, res)
   }
 
-  private def processDeployWithCostAccounting(
+  /* private def processDeployWithCostAccounting(
       runtime: Runtime[F]
   )(deploy: Signed[DeployData])(implicit Log: Log[F]) = {
     import cats.instances.vector._
@@ -445,7 +454,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
         /* we can end up here if any of the PreCharge threw an user error
         we still keep the logs (from the underlying WriterT) which we'll fill in the next step.
         We're assigning it 0 cost - replay should reach the same state
-         */
+   */
         case SystemDeployError(errorMsg) =>
           ProcessedDeploy
             .empty(deploy)
@@ -453,7 +462,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
       }
       .run // run the computation and produce the logs
       .map { case (accLog, pd) => pd.copy(deployLog = accLog.toList) }
-  }
+  }*/
 
   private def processDeploy(runtime: Runtime[F])(
       deploy: Signed[DeployData]
@@ -736,8 +745,10 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
 
   def getActiveValidators(startHash: StateHash): F[Seq[Validator]] = {
     val deploy = ConstructDeploy.sourceDeployNow(activaValidatorQuerySource)
-    captureResults(startHash, deploy)
-      .ensureOr(
+    Log[F].debug(s"getActiveValidators for ${PrettyPrinter.buildString(startHash)}") >> captureResults(
+      startHash,
+      deploy
+    ).ensureOr(
         validatorsPar =>
           new IllegalArgumentException(
             s"Incorrect number of results from query of current active balidator: ${validatorsPar.size}"

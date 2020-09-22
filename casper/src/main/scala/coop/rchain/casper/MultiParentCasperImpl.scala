@@ -130,7 +130,7 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
 
     def addNextReady: F[Unit] =
       for {
-        _ <- Log[F].debug("Trying to create block") >> createNew
+        _ <- createNew
 
         hash <- getNextReadyBlock
         _ <- Applicative[F].whenA(hash.isDefined)(
