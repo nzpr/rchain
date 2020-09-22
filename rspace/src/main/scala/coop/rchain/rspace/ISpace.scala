@@ -60,6 +60,8 @@ trait ISpace[F[_], C, P, A, K] extends Tuplespace[F, C, P, A, K] {
     Reverts the ISpace to the state checkpointed using {@link #createSoftCheckpoint()}
     */
   def revertToSoftCheckpoint(checkpoint: SoftCheckpoint[C, P, A, K]): F[Unit]
+
+  //def spawn:  F[ISpace[F, C, P, A, K]]
 }
 
 //TODO lookinto to removing  ISpace object.

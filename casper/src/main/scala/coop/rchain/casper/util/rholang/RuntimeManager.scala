@@ -33,13 +33,15 @@ import coop.rchain.models.Expr.ExprInstance.{EVarBody, GString}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.Var.VarInstance.FreeVar
 import coop.rchain.models._
-import coop.rchain.rholang.interpreter.Runtime.BlockData
+import coop.rchain.rholang.interpreter.Runtime.{BlockData, RhoISpace, RhoReplayISpace}
 import coop.rchain.rholang.interpreter.accounting._
 import coop.rchain.rholang.interpreter.errors.BugFoundError
 import coop.rchain.rholang.interpreter.{EvaluateResult, Interpreter, Reduce, RhoType, Runtime}
-import coop.rchain.rspace.{Blake2b256Hash, ReplayException}
+import coop.rchain.rspace
+import coop.rchain.rspace.{Blake2b256Hash, RSpace, ReplayException}
 import coop.rchain.shared.Log
 import monix.execution.Scheduler
+import monix.execution.atomic.AtomicAny
 
 trait RuntimeManager[F[_]] {
   def playSystemDeploy[S <: SystemDeploy](startHash: StateHash)(
@@ -88,9 +90,9 @@ trait RuntimeManager[F[_]] {
 final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: ContextShift: Parallel](
     emptyStateHash: StateHash,
     runtimeConf: RuntimeConf,
-    shardConf: CasperShardConf
-)(
-    implicit scheduler: Scheduler
+    shardConf: CasperShardConf,
+    space: RhoISpace[F],
+    replay: RhoReplayISpace[F]
 ) extends RuntimeManager[F] {
   import coop.rchain.models.rholang.{implicits => toPar}
 
@@ -827,7 +829,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
   }
 
   def withRuntime[A](f: Runtime[F] => F[A]): F[A] =
-    Sync[F].bracket(setupRuntime)(f)(destroyRuntime)
+    setupRuntime >>= f
 
   private def withResetRuntimeLock[R](hash: StateHash)(block: Runtime[F] => F[R]): F[R] =
     withRuntime(
@@ -897,18 +899,26 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
         )
     )
 
-  def setupRuntime(
-      implicit scheduler: Scheduler
-  ): F[Runtime[F]] =
+  def setupRuntime: F[Runtime[F]] =
     for {
-      sarAndHR           <- Runtime.setupRSpace[F](runtimeConf.storage, runtimeConf.size)
-      (space, replay, _) = sarAndHR
-      runtime            <- Runtime.createWithEmptyCost[F]((space, replay), Seq.empty)
+      newSpace <- space
+                   .asInstanceOf[
+                     rspace.RSpace[F, Par, BindPattern, ListParWithRandom, TaggedContinuation]
+                   ]
+                   .spawn
+      newReplay <- replay
+                    .asInstanceOf[rspace.ReplayRSpace[
+                      F,
+                      Par,
+                      BindPattern,
+                      ListParWithRandom,
+                      TaggedContinuation
+                    ]]
+                    .spawn
+      r       = (newSpace.asInstanceOf[RhoISpace[F]], newReplay.asInstanceOf[RhoReplayISpace[F]])
+      runtime <- Runtime.createWithEmptyCost[F](r, Seq.empty)
     } yield runtime
 
-  def destroyRuntime(
-      runtime: Runtime[F]
-  ) = runtime.close()
 }
 
 object RuntimeManager {
@@ -937,9 +947,8 @@ object RuntimeManager {
       hash               = ByteString.copyFrom(checkpoint.root.bytes.toArray)
       replayHash         = ByteString.copyFrom(replayCheckpoint.root.bytes.toArray)
       // We don't need runtime once RSpace is initialized and we have `empty hash` for runtime manager
-      _ <- runtime.close()
       _ = assert(hash == replayHash)
-    } yield RuntimeManagerImpl(hash, runtimeConf, shardConf)
+    } yield RuntimeManagerImpl(hash, runtimeConf, shardConf, space, replay)
 
   def evaluate[F[_]: Sync](
       reducer: Reduce[F],

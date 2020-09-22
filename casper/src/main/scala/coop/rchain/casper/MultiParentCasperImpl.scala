@@ -112,8 +112,26 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
     */
   def addBlock(b: BlockMessage, allowAddFromBuffer: Boolean): F[ValidBlockProcessing] = {
 
+    def createNew: F[Unit] =
+      for {
+        _          <- Metrics[F].incrementCounter("propose")
+        maybeBlock <- createBlock
+        result <- maybeBlock match {
+                   case _: NoBlock =>
+                     BlockStatus
+                       .exception(new Exception("Error while creating block"))
+                       .asLeft[ValidBlock]
+                       .pure[F]
+                   case Created(block) =>
+                     Log[F].info(s"Proposing ${PrettyPrinter.buildString(block)}") *>
+                       addBlock(block)
+                 }
+      } yield ()
+
     def addNextReady: F[Unit] =
       for {
+        _ <- Log[F].debug("Trying to create block") >> createNew
+
         hash <- getNextReadyBlock
         _ <- Applicative[F].whenA(hash.isDefined)(
               Log[F].info(
@@ -132,8 +150,8 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
       // We force Casper to be single t hreaded. More investigations needed to allow it be multi threaded.
       addResult <- for {
                     hashInProcess <- blocksInProcessing.modify(
-                                     cur => ((cur + b.blockHash), cur.contains(b.blockHash))
-                                   )
+                                      cur => ((cur + b.blockHash), cur.contains(b.blockHash))
+                                    )
                     _ <- Log[F].info(
                           s"Block ${PrettyPrinter.buildString(b, short = true)} start processing."
                         )
@@ -141,14 +159,11 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
                         else BlockStatus.processed.asLeft[ValidBlock].pure[F]
                     _ <- BlockRetriever[F].ackInCasper(b.blockHash)
                   } yield r
-      _ <- casperBuffer.remove(b.blockHash)
+      _ <- casperBuffer.remove(b.blockHash) >> blocksInProcessing.update(_ - b.blockHash)
 
       _ <- Log[F].info(
-        s"Block ${PrettyPrinter.buildString(b, short = true)} processed."
-      ) >>
-        Log[F].debug("Trying to create block") >> createBlock >> blocksInProcessing
-        .update(_ - b.blockHash)
-
+            s"Block ${PrettyPrinter.buildString(b, short = true)} processed."
+          )
       _ <- addResult match {
             case Right(_) =>
               for {
