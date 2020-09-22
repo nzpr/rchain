@@ -313,7 +313,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
                                   runtime,
                                   startHash,
                                   terms,
-                                  processDeploy(runtime)
+                                  processDeployWithCostAccounting(runtime)
                                 )
           (startHash, processedDeploys) = deployProcessResult
           systemDeployProcessResult <- {
@@ -375,7 +375,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
                      startHash,
                      terms,
                      systemDeploys,
-                     replayDeploy(runtime, withCostAccounting = false /*!isGenesis*/ ),
+                     replayDeploy(runtime, withCostAccounting = !isGenesis),
                      replaySystemDeploy(runtime, blockData)
                    )
         } yield result
@@ -400,7 +400,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     } yield (finalStateHash.toByteString, res)
   }
 
-  /* private def processDeployWithCostAccounting(
+  private def processDeployWithCostAccounting(
       runtime: Runtime[F]
   )(deploy: Signed[DeployData])(implicit Log: Log[F]) = {
     import cats.instances.vector._
@@ -454,7 +454,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
         /* we can end up here if any of the PreCharge threw an user error
         we still keep the logs (from the underlying WriterT) which we'll fill in the next step.
         We're assigning it 0 cost - replay should reach the same state
-   */
+         */
         case SystemDeployError(errorMsg) =>
           ProcessedDeploy
             .empty(deploy)
@@ -462,7 +462,7 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
       }
       .run // run the computation and produce the logs
       .map { case (accLog, pd) => pd.copy(deployLog = accLog.toList) }
-  }*/
+  }
 
   private def processDeploy(runtime: Runtime[F])(
       deploy: Signed[DeployData]
