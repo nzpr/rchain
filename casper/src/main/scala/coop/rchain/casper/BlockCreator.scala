@@ -1,7 +1,8 @@
 package coop.rchain.casper
 
 import cats.Monad
-import cats.effect.Sync
+import cats.effect.concurrent.Ref
+import cats.effect.{Concurrent, Sync}
 import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
@@ -16,7 +17,7 @@ import coop.rchain.casper.util.rholang.{SystemDeploy, _}
 import coop.rchain.casper.util.{ConstructDeploy, DagOperations, ProtoUtil}
 import coop.rchain.crypto.{PrivateKey, PublicKey}
 import coop.rchain.crypto.signatures.Signed
-import coop.rchain.metrics.{Metrics, Span}
+import coop.rchain.metrics.{Metrics, MetricsSemaphore, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
 import coop.rchain.models.Validator.Validator
@@ -25,10 +26,9 @@ import coop.rchain.shared.{Cell, Log, Time}
 import coop.rchain.casper.util.rholang.SystemDeployUtil
 
 final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
-    dummyDeployerPrivateKey: Option[PrivateKey] = None
-) {
-  private[this] val CreateBlockMetricsSource =
-    Metrics.Source(CasperMetricsSource, "create-block")
+    dummyDeployerPrivateKey: Option[PrivateKey] = None,
+    isLockedRef: Ref[F, Boolean]
+)(implicit metricsSource: Metrics.Source) {
   private[this] val ProcessDeploysAndCreateBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "process-deploys-and-create-bloc")
 
@@ -72,7 +72,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
       runtimeManager: RuntimeManager[F],
       shardConfigMap: ShardOnChainConfig[F]
   )(implicit spanF: Span[F]): F[CreateBlockStatus] =
-    spanF.trace(CreateBlockMetricsSource) {
+    spanF.trace(metricsSource) {
       import cats.instances.list._
 
       def prepareDeploys(
@@ -151,7 +151,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
           .warn("Too far ahead of the last finalized block")
           .as(CreateBlockStatus.tooFarAheadOfLastFinalized)
 
-      for {
+      val doCreate = for {
         _ <- Log[F].debug("Trying to create block")
         // Note: Estimator[F].tips returns sequence sorted by sender weight
         tipHashes       <- Estimator[F].tips(dag, genesis)
@@ -229,17 +229,27 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
 
                 result <- checkSynchronyConstraint.ifM(
                            checkLastFinalizedHeightConstraint.ifM(
+                             // Block creator should be unlocked by Casper when it adds block
                              propose,
-                             lfhcCheckFailed
+                             unlock >> lfhcCheckFailed
                            ),
-                           syncCheckFailed
+                           unlock >> syncCheckFailed
                          )
 
               } yield result,
-              CreateBlockStatus.readOnlyMode.pure[F]
+              unlock >> CreateBlockStatus.readOnlyMode.pure[F]
             )
       } yield r
+
+      isLockedRef.get
+        .ifM(
+          CreateBlockStatus.lockUnavailable.pure[F],
+          isLockedRef.set(true) >> Log[F]
+            .info(s"Creating block. Locking until Casper adds it.") >> doCreate
+        )
     }
+
+  def unlock: F[Unit] = isLockedRef.set(false)
 
   // TODO: Remove no longer valid deploys here instead of with lastFinalizedBlock call
   private def extractDeploys(
@@ -371,4 +381,12 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
 
 object BlockCreator {
   def apply[F[_]](implicit ev: BlockCreator[F]): BlockCreator[F] = ev
+  def apply[F[_]: Concurrent: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
+      dummyDeployerPrivateKey: Option[PrivateKey] = None
+  ): F[BlockCreator[F]] = {
+    implicit val CreateBlockMetricsSource = Metrics.Source(CasperMetricsSource, "create-block")
+    for {
+      isLockedRef <- Ref.of(false)
+    } yield new BlockCreator[F](dummyDeployerPrivateKey, isLockedRef)
+  }
 }
