@@ -299,24 +299,22 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
       blockData: BlockData,
       invalidBlocks: Map[BlockHash, Validator] = Map.empty[BlockHash, Validator]
   ): F[(StateHash, Seq[ProcessedDeploy], Seq[ProcessedSystemDeploy])] =
-    withRuntime { runtime =>
-      Span[F].trace(computeStateLabel) {
-        for {
-          _ <- Log[F].info(
-                s"Computing postStateHah for play, preStateHash = ${PrettyPrinter
-                  .buildString(startHash)}, system deploys num: ${systemDeploys.size}"
-              )
-          _ <- runtime.blockData.set(blockData)
-          _ <- setInvalidBlocks(invalidBlocks, runtime)
-          _ <- Span[F].mark("before-process-deploys")
-          deployProcessResult <- processDeploys(
-                                  runtime,
-                                  startHash,
-                                  terms,
-                                  processDeployWithCostAccounting(runtime)
-                                )
-          (startHash, processedDeploys) = deployProcessResult
-          systemDeployProcessResult <- {
+    Span[F].trace(computeStateLabel) {
+      for {
+        _ <- Log[F].info(
+              s"Computing postStateHah for play, preStateHash = ${PrettyPrinter
+                .buildString(startHash)}, system deploys num: ${systemDeploys.size}"
+            )
+        _ <- Span[F].mark("before-process-deploys")
+        deployProcessResult <- processDeploys(
+                                startHash,
+                                terms,
+                                blockData,
+                                invalidBlocks
+                              )
+        (startHash, processedDeploys) = deployProcessResult
+        systemDeployProcessResult <- {
+          withRuntime { runtime =>
             import cats.instances.list._
             systemDeploys.toList.foldM((startHash, Vector.empty[ProcessedSystemDeploy])) {
               case ((startHash, processedSystemDeploys), sd) =>
@@ -330,9 +328,9 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
                 }
             }
           }
-          (postStateHash, processedSystemDeploys) = systemDeployProcessResult
-        } yield (postStateHash, processedDeploys, processedSystemDeploys)
-      }
+        }
+        (postStateHash, processedSystemDeploys) = systemDeployProcessResult
+      } yield (postStateHash, processedDeploys, processedSystemDeploys)
     }
 
   def computeGenesis(
@@ -343,11 +341,14 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     withRuntime { runtime =>
       Span[F].trace(computeGenesisLabel) {
         for {
-          _ <- runtime.blockData.set(
-                BlockData(blockTime, 0, PublicKey(Array[Byte]()), 0)
-              )
-          _          <- Span[F].mark("before-process-deploys")
-          evalResult <- processDeploys(runtime, startHash, terms, processDeploy(runtime))
+          _ <- Span[F].mark("before-process-deploys")
+          evalResult <- processDeploys(
+                         startHash,
+                         terms,
+                         BlockData(blockTime, 0, PublicKey(Array[Byte]()), 0),
+                         Map.empty,
+                         computeCost = false
+                       )
         } yield (startHash, evalResult._1, evalResult._2)
       }
     }
@@ -383,21 +384,30 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
     }
 
   private def processDeploys(
-      runtime: Runtime[F],
       startHash: StateHash,
       terms: Seq[Signed[DeployData]],
-      processDeploy: Signed[DeployData] => F[ProcessedDeploy]
+      blockData: BlockData,
+      invalidBlocks: Map[BlockHash, Validator],
+      computeCost: Boolean = true
   ): F[(StateHash, Seq[ProcessedDeploy])] = {
     import cats.instances.list._
-
     for {
-      _               <- runtime.space.reset(Blake2b256Hash.fromByteString(startHash))
-      _               <- Log[F].info(s"terms ${terms.size}, term ${terms.head.data.term}")
-      res             <- terms.toList.traverse(processDeploy)
+      processedDeploys <- terms.toList.traverse { deploy =>
+                           withResetRuntimeLock(startHash) { runtime =>
+                             for {
+                               _ <- runtime.blockData.set(blockData)
+                               _ <- setInvalidBlocks(invalidBlocks, runtime)
+                               r <- if (computeCost)
+                                     processDeployWithCostAccounting(runtime)(deploy)
+                                   else
+                                     processDeploy(runtime)(deploy)
+                             } yield r
+                           }
+                         }
       _               <- Span[F].mark("before-process-deploys-create-checkpoint")
-      finalCheckpoint <- runtime.space.createCheckpoint()
+      finalCheckpoint <- withRuntime(_.space.createCheckpoint())
       finalStateHash  = finalCheckpoint.root
-    } yield (finalStateHash.toByteString, res)
+    } yield (finalStateHash.toByteString, processedDeploys)
   }
 
   private def processDeployWithCostAccounting(
