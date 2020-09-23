@@ -123,7 +123,7 @@ object ConfigMapper {
       add("metrics.sigar", run.sigar)
 
       add("dev-mode", run.devMode)
-      add("dev.deployer-private-key", run.deployerPrivateKey)
+      add("dev.deployers-private-keys", run.deployersPrivateKeys)
 
       //TODO remove
       //add(keys.KnownValidatorsFile, run.knownValidators
@@ -145,6 +145,8 @@ object ConfigMapper {
     implicit val longConverter: OptionConverter[Long]         = (l: Long) => l
     implicit val floatConverter: OptionConverter[Float]       = (f: Float) => f
     implicit val pathConverter: OptionConverter[Path]         = (p: Path) => p.toString
+    implicit val stringListConverter: OptionConverter[List[String]] = (l: List[String]) =>
+      l.mkString(",")
     implicit val peerNodeConverter: OptionConverter[PeerNode] = (p: PeerNode) => p.toAddress
     implicit val durationConverter: OptionConverter[FiniteDuration] =
       (d: FiniteDuration) => java.time.Duration.ofNanos(d.toNanos)

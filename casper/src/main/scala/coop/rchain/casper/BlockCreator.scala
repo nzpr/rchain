@@ -26,7 +26,7 @@ import coop.rchain.shared.{Cell, Log, Time}
 import coop.rchain.casper.util.rholang.SystemDeployUtil
 
 final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
-    dummyDeployerPrivateKey: Option[PrivateKey] = None,
+    dummyDeployerPrivateKeys: List[PrivateKey] = List.empty,
     isLockedRef: Ref[F, Boolean]
 )(implicit metricsSource: Metrics.Source) {
   private[this] val ProcessDeploysAndCreateBlockMetricsSource =
@@ -201,13 +201,17 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
                         shardConfig.deployLifespan
                       )
                   (userDeploys, slashingDeploys) = d
-                  deploys = (if (dummyDeployerPrivateKey.nonEmpty)
-                               userDeploys :+ ConstructDeploy.sourceDeploy(
-                                 source = "@0!(0)",
-                                 timestamp = System.currentTimeMillis(),
-                                 sec = dummyDeployerPrivateKey.get,
-                                 validAfterBlockNumber = maxBlockNumber
-                               )
+                  dummyDeploys = dummyDeployerPrivateKeys.map(
+                    key =>
+                      ConstructDeploy.sourceDeploy(
+                        source = "@0!(0)",
+                        timestamp = System.currentTimeMillis(),
+                        sec = key,
+                        validAfterBlockNumber = maxBlockNumber
+                      )
+                  )
+                  deploys = (if (dummyDeployerPrivateKeys.nonEmpty)
+                               userDeploys ++ dummyDeploys
                              else userDeploys)
                   r <- if (deploys.nonEmpty || slashingDeploys.nonEmpty) {
                         makeSignedBlock(
@@ -382,11 +386,11 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
 object BlockCreator {
   def apply[F[_]](implicit ev: BlockCreator[F]): BlockCreator[F] = ev
   def apply[F[_]: Concurrent: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
-      dummyDeployerPrivateKey: Option[PrivateKey] = None
+      dummyDeployerPrivateKeys: List[PrivateKey] = List.empty
   ): F[BlockCreator[F]] = {
     implicit val CreateBlockMetricsSource = Metrics.Source(CasperMetricsSource, "create-block")
     for {
       isLockedRef <- Ref.of(false)
-    } yield new BlockCreator[F](dummyDeployerPrivateKey, isLockedRef)
+    } yield new BlockCreator[F](dummyDeployerPrivateKeys, isLockedRef)
   }
 }

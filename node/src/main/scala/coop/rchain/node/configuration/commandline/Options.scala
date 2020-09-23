@@ -537,9 +537,10 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
       descr = "Enable all developer tools."
     )
 
-    val deployerPrivateKey = opt[String](
-      descr = "Private key for dummy deploys."
-    )
+    val deployersPrivateKeys = opt[List[String]](
+      descr =
+        "List of privates key for dummy deploys. For each key, deploy `@0!(0)` will be added to each block."
+    )(stringListConverter)
   }
   addSubcommand(run)
 

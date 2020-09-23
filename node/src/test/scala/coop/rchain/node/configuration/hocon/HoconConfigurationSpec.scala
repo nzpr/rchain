@@ -165,7 +165,7 @@ class HoconConfigurationSpec extends FunSuite with Matchers {
       ),
       devMode = false,
       dev = DevConf(
-        deployerPrivateKey = None
+        deployerPrivateKeys = None
       )
     )
     config shouldEqual expectedConfig

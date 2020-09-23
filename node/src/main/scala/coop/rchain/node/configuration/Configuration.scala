@@ -110,9 +110,9 @@ object Configuration {
     if (nodeConf.devMode) {
       nodeConf
     } else {
-      if (nodeConf.dev.deployerPrivateKey.nonEmpty)
-        System.out.println("Node is not in dev mode, ignoring --deployer-private-key")
-      nodeConf.copy(dev = DevConf(deployerPrivateKey = None))
+      if (nodeConf.dev.deployersPrivateKeys.nonEmpty)
+        System.out.println("Node is not in dev mode, ignoring --deployers-private-keys")
+      nodeConf.copy(dev = DevConf(deployersPrivateKeys = List.empty))
     }
 
   final case class Profile(name: String, dataDir: (Path, String))

@@ -258,7 +258,7 @@ class ConfigMapperSpec extends FunSuite with Matchers {
         sigar = true
       ),
       devMode = true,
-      dev = DevConf(deployerPrivateKey = Some("somerandonmprivatekey"))
+      dev = DevConf(deployerPrivateKeys = Some("somerandonmprivatekey"))
     )
     config shouldEqual expectedConfig
   }

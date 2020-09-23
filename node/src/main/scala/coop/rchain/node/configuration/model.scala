@@ -102,7 +102,7 @@ final case class Metrics(
 )
 
 final case class DevConf(
-    deployerPrivateKey: Option[String]
+    deployersPrivateKeys: List[String]
 )
 
 sealed trait Command
