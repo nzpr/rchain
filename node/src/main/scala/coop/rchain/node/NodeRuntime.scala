@@ -855,17 +855,18 @@ object NodeRuntime {
       envVars      = EnvVars.envVars[F]
       raiseIOError = IOError.raiseIOErrorThroughSync[F]
 
-      blockCreator = {
+      blockCreator <- {
         implicit val bs         = blockStore
         implicit val es         = estimator
         implicit val ds         = deployStorage
         implicit val scc        = synchronyConstraintChecker
         implicit val lfhc       = lastFinalizedHeightConstraintChecker
+        implicit val dags       = blockDagStorage
         val dummyDeployerKeyOpt = conf.dev.deployerPrivateKey
         val dummyDeployerKey =
           if (dummyDeployerKeyOpt.isEmpty) None
           else PrivateKey(Base16.decode(dummyDeployerKeyOpt.get).get).some
-        new BlockCreator[F](dummyDeployerKey)
+        BlockCreator[F](dummyDeployerKey)
       }
 
       casperLaunch = {

@@ -1,11 +1,12 @@
 package coop.rchain.casper
 
 import cats.Monad
-import cats.effect.Sync
+import cats.effect.concurrent.{MVar, Ref}
+import cats.effect.{Concurrent, Sync}
 import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
-import coop.rchain.blockstorage.dag.BlockDagRepresentation
+import coop.rchain.blockstorage.dag.{BlockDagRepresentation, BlockDagStorage}
 import coop.rchain.blockstorage.deploy.DeployStorage
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.casper.protocol._
@@ -16,7 +17,7 @@ import coop.rchain.casper.util.rholang.{SystemDeploy, _}
 import coop.rchain.casper.util.{ConstructDeploy, DagOperations, ProtoUtil}
 import coop.rchain.crypto.{PrivateKey, PublicKey}
 import coop.rchain.crypto.signatures.Signed
-import coop.rchain.metrics.{Metrics, Span}
+import coop.rchain.metrics.{Metrics, MetricsSemaphore, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
 import coop.rchain.models.Validator.Validator
@@ -24,11 +25,11 @@ import coop.rchain.rholang.interpreter.Runtime.BlockData
 import coop.rchain.shared.{Cell, Log, Time}
 import coop.rchain.casper.util.rholang.SystemDeployUtil
 
-final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker](
-    dummyDeployerPrivateKey: Option[PrivateKey] = None
-) {
-  private[this] val CreateBlockMetricsSource =
-    Metrics.Source(CasperMetricsSource, "create-block")
+final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: BlockDagStorage](
+    dummyDeployerPrivateKey: Option[PrivateKey] = None,
+    creatorLock: MetricsSemaphore[F],
+    accessLock: MetricsSemaphore[F]
+)(implicit metricsSource: Metrics.Source) {
   private[this] val ProcessDeploysAndCreateBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "process-deploys-and-create-bloc")
 
@@ -66,16 +67,16 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
    *  4. Create a new block that contains the deploys from the previous step.
    */
   def createBlock(
-      dag: BlockDagRepresentation[F],
       genesis: BlockMessage,
       validatorIdentity: ValidatorIdentity,
       runtimeManager: RuntimeManager[F],
       shardConfigMap: ShardOnChainConfig[F]
   )(implicit spanF: Span[F]): F[CreateBlockStatus] =
-    spanF.trace(CreateBlockMetricsSource) {
+    spanF.trace(metricsSource) {
       import cats.instances.list._
 
       def prepareDeploys(
+          dag: BlockDagRepresentation[F],
           parentMetadatas: Seq[BlockMetadata],
           seqNum: Int,
           maxBlockNumber: Long,
@@ -101,6 +102,7 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
         } yield (deploys, slashingDeploys.toSeq)
 
       def makeSignedBlock(
+          dag: BlockDagRepresentation[F],
           parents: List[BlockMessage],
           seqNum: Int,
           maxBlockNumber: Long,
@@ -151,95 +153,120 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
           .warn("Too far ahead of the last finalized block")
           .as(CreateBlockStatus.tooFarAheadOfLastFinalized)
 
-      for {
-        _ <- Log[F].debug("Trying to create block")
-        // Note: Estimator[F].tips returns sequence sorted by sender weight
-        tipHashes       <- Estimator[F].tips(dag, genesis)
-        _               <- spanF.mark("after-estimator")
-        parentMetadatas <- EstimatorHelper.chooseNonConflicting(tipHashes, dag)
-        _               <- spanF.mark("non-conflicting-chosen")
-        parentsStr      = parentMetadatas.map(b => PrettyPrinter.buildString(b.blockHash)).mkString(", ")
-        parents         <- parentMetadatas.toList.traverse(p => BlockStore[F].getUnsafe(p.blockHash))
-        // TODO the following is too strict not honor Casper discipline. Rewrite to obey SafetyOracle logic
-        // there are 3 situations on judging whether the validator is active
-        // 1. it is possible that you are active in some parents but not active in other parents
-        // 2. all of the parents are in active state
-        // 3. all of the parents are not in active state
-        // Let's just talk about 1 situation because 2 and 3 are easy to judge.
-        // If one validator issue a bonding or unbonding request , it would be possible to end up with
-        // parent in 1 situation. It would be safer for the validator to make sure all parents post state
-        // are in active state.
-        r <- selfIsActiveValidator(parents).ifM(
-              for {
-                // In the very beginning of block creation we need to get all on-chain data neccessary
-                // runtime = RuntimeManager.spawnRuntime(parents.)
-                selfId            <- ByteString.copyFrom(validatorIdentity.publicKey.bytes).pure[F]
-                selfLatestMessage <- dag.latestMessage(selfId)
-                blockSeqNum       = selfLatestMessage.fold(0)(_.seqNum) + 1
-                maxBlockNumber    = ProtoUtil.maxBlockNumberMetadata(parentMetadatas)
-                mainParent        = parents.head
-                shardConfig       <- shardConfigMap.get(ProtoUtil.postStateHash(mainParent))
-                p                 = parents.take(shardConfig.maxNumberOfParents)
-                checkSynchronyConstraint = SynchronyConstraintChecker[F]
-                  .check(
-                    dag,
-                    runtimeManager,
-                    genesis,
-                    selfId,
-                    shardConfig.synchronyConstraintThreshold
-                  )
-                checkLastFinalizedHeightConstraint = LastFinalizedHeightConstraintChecker[F]
-                  .check(dag, genesis, selfId, shardConfig.heightConstraintThreshold)
-                propose = for {
-                  _ <- Log[F].info(
-                        s"Creating block with seqNum ${blockSeqNum} and maxBlockNumber ${maxBlockNumber}."
-                      )
-                  d <- prepareDeploys(
-                        parentMetadatas,
-                        blockSeqNum,
-                        maxBlockNumber,
-                        shardConfig.deployLifespan
-                      )
-                  (userDeploys, slashingDeploys) = d
-                  deploys = (if (dummyDeployerPrivateKey.nonEmpty)
-                               userDeploys :+ ConstructDeploy.sourceDeploy(
-                                 source = "@0!(0)",
-                                 timestamp = System.currentTimeMillis(),
-                                 sec = dummyDeployerPrivateKey.get,
-                                 validAfterBlockNumber = maxBlockNumber
-                               )
-                             else userDeploys)
-                  r <- if (deploys.nonEmpty || slashingDeploys.nonEmpty) {
-                        makeSignedBlock(
-                          parents,
+      def doCreate(dag: BlockDagRepresentation[F]) =
+        for {
+          _ <- Log[F].debug("Trying to create block")
+          // Note: Estimator[F].tips returns sequence sorted by sender weight
+          tipHashes       <- Estimator[F].tips(dag, genesis)
+          _               <- spanF.mark("after-estimator")
+          parentMetadatas <- EstimatorHelper.chooseNonConflicting(tipHashes, dag)
+          _               <- spanF.mark("non-conflicting-chosen")
+          parentsStr = parentMetadatas
+            .map(b => PrettyPrinter.buildString(b.blockHash))
+            .mkString(", ")
+          parents <- parentMetadatas.toList.traverse(p => BlockStore[F].getUnsafe(p.blockHash))
+          // TODO the following is too strict not honor Casper discipline. Rewrite to obey SafetyOracle logic
+          // there are 3 situations on judging whether the validator is active
+          // 1. it is possible that you are active in some parents but not active in other parents
+          // 2. all of the parents are in active state
+          // 3. all of the parents are not in active state
+          // Let's just talk about 1 situation because 2 and 3 are easy to judge.
+          // If one validator issue a bonding or unbonding request , it would be possible to end up with
+          // parent in 1 situation. It would be safer for the validator to make sure all parents post state
+          // are in active state.
+          r <- selfIsActiveValidator(parents).ifM(
+                for {
+                  // In the very beginning of block creation we need to get all on-chain data neccessary
+                  // runtime = RuntimeManager.spawnRuntime(parents.)
+                  selfId            <- ByteString.copyFrom(validatorIdentity.publicKey.bytes).pure[F]
+                  selfLatestMessage <- dag.latestMessage(selfId)
+                  blockSeqNum       = selfLatestMessage.fold(0)(_.seqNum) + 1
+                  maxBlockNumber    = ProtoUtil.maxBlockNumberMetadata(parentMetadatas)
+                  mainParent        = parents.head
+                  shardConfig       <- shardConfigMap.get(ProtoUtil.postStateHash(mainParent))
+                  p                 = parents.take(shardConfig.maxNumberOfParents)
+                  checkSynchronyConstraint = SynchronyConstraintChecker[F]
+                    .check(
+                      dag,
+                      runtimeManager,
+                      genesis,
+                      selfId,
+                      shardConfig.synchronyConstraintThreshold
+                    )
+                  checkLastFinalizedHeightConstraint = LastFinalizedHeightConstraintChecker[F]
+                    .check(dag, genesis, selfId, shardConfig.heightConstraintThreshold)
+                  propose = for {
+                    _ <- Log[F].info(
+                          s"Creating block with seqNum ${blockSeqNum} and maxBlockNumber ${maxBlockNumber}."
+                        )
+                    d <- prepareDeploys(
+                          dag,
+                          parentMetadatas,
                           blockSeqNum,
                           maxBlockNumber,
-                          deploys,
-                          slashingDeploys :+ CloseBlockDeploy(
-                            SystemDeployUtil
-                              .generateCloseDeployRandomSeed(selfId, blockSeqNum)
-                          ),
-                          shardConfig.shardName,
-                          shardConfig.casperVersion
+                          shardConfig.deployLifespan
                         )
-                      } else {
-                        CreateBlockStatus.noNewDeploys.pure[F]
-                      }
-                } yield r
+                    (userDeploys, slashingDeploys) = d
+                    deploys = (if (dummyDeployerPrivateKey.nonEmpty)
+                                 userDeploys :+ ConstructDeploy.sourceDeploy(
+                                   source = "@0!(0)",
+                                   timestamp = System.currentTimeMillis(),
+                                   sec = dummyDeployerPrivateKey.get,
+                                   validAfterBlockNumber = maxBlockNumber
+                                 )
+                               else userDeploys)
+                    r <- if (deploys.nonEmpty || slashingDeploys.nonEmpty) {
+                          makeSignedBlock(
+                            dag,
+                            parents,
+                            blockSeqNum,
+                            maxBlockNumber,
+                            deploys,
+                            slashingDeploys :+ CloseBlockDeploy(
+                              SystemDeployUtil
+                                .generateCloseDeployRandomSeed(selfId, blockSeqNum)
+                            ),
+                            shardConfig.shardName,
+                            shardConfig.casperVersion
+                          )
+                        } else {
+                          CreateBlockStatus.noNewDeploys.pure[F]
+                        }
+                  } yield r
 
-                result <- checkSynchronyConstraint.ifM(
-                           checkLastFinalizedHeightConstraint.ifM(
-                             propose,
-                             lfhcCheckFailed
-                           ),
-                           syncCheckFailed
-                         )
+                  result <- checkSynchronyConstraint.ifM(
+                             checkLastFinalizedHeightConstraint.ifM(
+                               // Block creator should be unlocked by Casper when it adds block
+                               propose,
+                               unlock >> lfhcCheckFailed
+                             ),
+                             unlock >> syncCheckFailed
+                           )
 
-              } yield result,
-              CreateBlockStatus.readOnlyMode.pure[F]
-            )
-      } yield r
+                } yield result,
+                unlock >> CreateBlockStatus.readOnlyMode.pure[F]
+              )
+        } yield r
+
+      // This lock has to have 2 permits - one for propose in progress and one for pending request to propose
+      // If this lock does not have permits - it should immediately return
+      accessLock.tryAcquire
+        .ifM(
+          for {
+            _ <- Log[F].info(s"Received request for block creation.")
+            // This lock is required for pending request for propose to hold on until previous propose accomplish
+            // Casper should release it using public `unlock` method after block proposed is added
+            _     <- creatorLock.acquire
+            _     <- Log[F].info(s"Creating block. Locking creator until Casper adds block.")
+            dag   <- BlockDagStorage[F].getRepresentation
+            block <- doCreate(dag)
+          } yield block,
+          CreateBlockStatus.lockUnavailable.pure[F]
+        )
     }
+
+  // This is called either node cannot create block, or, if block is created - after Casper added block
+  def unlock: F[Unit] = creatorLock.release >> accessLock.release
 
   // TODO: Remove no longer valid deploys here instead of with lastFinalizedBlock call
   private def extractDeploys(
@@ -371,4 +398,14 @@ final class BlockCreator[F[_]: Sync: Log: Time: BlockStore: Estimator: DeploySto
 
 object BlockCreator {
   def apply[F[_]](implicit ev: BlockCreator[F]): BlockCreator[F] = ev
+  def apply[F[_]: Concurrent: Log: Time: BlockStore: Estimator: DeployStorage: Metrics: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: BlockDagStorage](
+      dummyDeployerPrivateKey: Option[PrivateKey] = None
+  ): F[BlockCreator[F]] = {
+    implicit val CreateBlockMetricsSource = Metrics.Source(CasperMetricsSource, "create-block")
+    for {
+      blockCreationLock <- MetricsSemaphore.single
+      // One access for block creation one for pending request to create block
+      accessLock <- MetricsSemaphore[F](2)
+    } yield new BlockCreator[F](dummyDeployerPrivateKey, blockCreationLock, accessLock)
+  }
 }

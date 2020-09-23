@@ -164,6 +164,10 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
       _ <- Log[F].info(
             s"Block ${PrettyPrinter.buildString(b, short = true)} processed."
           )
+
+      // Unlock block creator if block added is self proposed block
+      _ <- (Log[F].info(s"Self block is added, unlocking BlockCreator") >> BlockCreator[F].unlock)
+            .whenA(b.sender.toByteArray sameElements validatorId.get.publicKey.bytes)
       _ <- addResult match {
             case Right(_) =>
               for {
@@ -295,10 +299,8 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Las
     (validatorId match {
       case Some(validatorIdentity) =>
         for {
-          dag <- BlockDagStorage[F].getRepresentation
           block <- BlockCreator[F]
                     .createBlock(
-                      dag,
                       approvedBlock,
                       validatorIdentity,
                       runtimeManager,
