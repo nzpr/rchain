@@ -3,7 +3,9 @@ package coop.rchain.rspace.history
 import cats.effect.Sync
 import java.nio.file.{Files, Path}
 
+import cats.effect.concurrent.Ref
 import coop.rchain.rspace.{
+  Blake2b256Hash,
   DeleteContinuations,
   DeleteData,
   DeleteJoins,
@@ -57,13 +59,15 @@ class LMDBHistoryRepositoryGenerativeSpec
       emptyHistory     = HistoryInstances.merging(History.emptyRootHash, historyStore)
       exporter         = RSpaceExporterImpl[Task](historyLmdbStore, coldLmdbStore, rootsLmdbStore)
       importer         = RSpaceImporterImpl[Task](historyLmdbStore, coldLmdbStore, rootsLmdbStore)
+      hashMap          <- Ref.of[Task, Map[Blake2b256Hash, Set[Blake2b256Hash]]](Map.empty)
       repository: HistoryRepository[Task, String, Pattern, String, StringsCaptor] = HistoryRepositoryImpl
         .apply[Task, String, Pattern, String, StringsCaptor](
           emptyHistory,
           rootRepository,
           coldStore,
           exporter,
-          importer
+          importer,
+          hashMap
         )
     } yield repository
 
@@ -78,15 +82,17 @@ class InmemHistoryRepositoryGenerativeSpec
   override def repo: Task[HistoryRepository[Task, String, Pattern, String, StringsCaptor]] = {
     val emptyHistory =
       HistoryInstances.merging[Task](History.emptyRootHash, inMemHistoryStore)
-    val repository: HistoryRepository[Task, String, Pattern, String, StringsCaptor] =
-      HistoryRepositoryImpl.apply[Task, String, Pattern, String, StringsCaptor](
-        emptyHistory,
-        rootRepository,
-        inMemColdStore,
-        emptyExporter,
-        emptyImporter
-      )
-    repository.pure[Task]
+    for {
+      map <- Ref.of[Task, Map[Blake2b256Hash, Set[Blake2b256Hash]]](Map.empty)
+      r = HistoryRepositoryImpl.apply[Task, String, Pattern, String, StringsCaptor](
+            emptyHistory,
+            rootRepository,
+            inMemColdStore,
+            emptyExporter,
+            emptyImporter,
+            map
+          )
+    } yield r
   }
 }
 

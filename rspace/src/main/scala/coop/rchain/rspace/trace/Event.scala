@@ -4,10 +4,12 @@ import cats.effect.Sync
 import coop.rchain.rspace.StableHashProvider._
 import coop.rchain.rspace.internal._
 import cats.implicits._
-import coop.rchain.rspace.Blake2b256Hash
+import coop.rchain.crypto.codec.Base16
+import coop.rchain.rspace.{Blake2b256Hash, StableHashProvider}
 import coop.rchain.shared.Serialize
 import coop.rchain.rspace.internal.codecSeq
 import coop.rchain.shared.Serialize
+import scalapb.GeneratedMessage
 import scodec.Codec
 import scodec.bits.ByteVector
 import scodec.codecs._
@@ -91,8 +93,12 @@ object Produce {
       serializeC: Serialize[C],
       serializeA: Serialize[A]
   ): Produce =
+//    val _ = println(
+//      s"Channel ${Base16.encode(channel.asInstanceOf[GeneratedMessage].toByteString.toByteArray)} hashed to ${StableHashProvider
+//        .hash(channel)(serializeC)} in eventLog"
+//    )
     new Produce(
-      hash(channel)(serializeC),
+      StableHashProvider.hash(channel)(serializeC),
       hash(channel, datum, persistent),
       persistent
     )

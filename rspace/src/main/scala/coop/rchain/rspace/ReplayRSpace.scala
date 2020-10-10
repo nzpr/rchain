@@ -11,7 +11,7 @@ import cats.implicits._
 import coop.rchain.catscontrib._
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.metrics.implicits._
-import coop.rchain.rspace.history.{Branch, HistoryRepository}
+import coop.rchain.rspace.history.{Branch, HistoryAction, HistoryRepository}
 import coop.rchain.rspace.internal._
 import coop.rchain.rspace.trace.{Produce, _}
 import coop.rchain.shared.{Log, Serialize}
@@ -255,6 +255,16 @@ class ReplayRSpace[F[_]: Sync, C, P, A, K](
       _           <- restoreInstalls()
     } yield (Checkpoint(nextHistory.history.root, Seq.empty))
   }
+
+  override def applyEventsAndCreateCheckpoint(
+      events: Seq[(Blake2b256Hash, Vector[Event])]
+  ): F[Checkpoint] =
+    for {
+      nextHistory <- historyRepositoryAtom.get().applyEventsAndCheckpoint(events)
+      _           = historyRepositoryAtom.set(nextHistory)
+      _           <- createNewHotStore(nextHistory)(serializeK.toCodec)
+      _           <- restoreInstalls()
+    } yield (Checkpoint(nextHistory.history.root, Seq.empty))
 
   override def clear(): F[Unit] = syncF.delay { replayData.clear() } >> super.clear()
 

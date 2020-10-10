@@ -3,15 +3,26 @@ package coop.rchain.rspace.history
 import cats.implicits._
 import cats.effect.Concurrent
 import cats.Parallel
+import cats.effect.concurrent.{MVar, Ref}
 import coop.rchain.rspace.state.{RSpaceExporter, RSpaceImporter}
 import coop.rchain.rspace.state.instances.{RSpaceExporterImpl, RSpaceImporterImpl}
+import coop.rchain.rspace.trace.Event
 import coop.rchain.rspace.{Blake2b256Hash, HistoryReader, HotStoreAction}
+import coop.rchain.shared.Serialize
 import coop.rchain.store.KeyValueStoreManager
 import org.lmdbjava.EnvFlags
 import scodec.Codec
 
+import scala.collection.concurrent.TrieMap
+
 trait HistoryRepository[F[_], C, P, A, K] extends HistoryReader[F, C, P, A, K] {
   def checkpoint(actions: List[HotStoreAction]): F[HistoryRepository[F, C, P, A, K]]
+
+  def applyEventsAndCheckpoint(
+      events: Seq[(Blake2b256Hash, Vector[Event])]
+  ): F[HistoryRepository[F, C, P, A, K]]
+
+  def getDataHashAtPath(key: Blake2b256Hash): F[Option[Blake2b256Hash]]
 
   def reset(root: Blake2b256Hash): F[HistoryRepository[F, C, P, A, K]]
 
@@ -46,7 +57,8 @@ object HistoryRepositoryInstances {
       implicit codecC: Codec[C],
       codecP: Codec[P],
       codecA: Codec[A],
-      codecK: Codec[K]
+      codecK: Codec[K],
+      sc: Serialize[C]
   ): F[HistoryRepository[F, C, P, A, K]] =
     for {
       // Roots store
@@ -63,11 +75,14 @@ object HistoryRepositoryInstances {
       // RSpace importer/exporter / directly operates on Store (lmdb)
       exporter = RSpaceExporterImpl[F](historyLMDBStore, coldLMDBStore, rootsLMDBStore)
       importer = RSpaceImporterImpl[F](historyLMDBStore, coldLMDBStore, rootsLMDBStore)
+      hashMap  <- Ref.of[F, Map[Blake2b256Hash, Set[Blake2b256Hash]]](Map.empty)
     } yield HistoryRepositoryImpl[F, C, P, A, K](
       history,
       rootsRepository,
       coldStore,
       exporter,
-      importer
+      importer,
+      hashMap,
+      sc
     )
 }

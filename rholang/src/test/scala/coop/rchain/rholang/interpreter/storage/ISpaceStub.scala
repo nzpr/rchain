@@ -2,16 +2,8 @@ package coop.rchain.rholang.interpreter.storage
 
 import cats.implicits._
 import cats.Applicative
-import coop.rchain.rspace.{
-  internal,
-  Blake2b256Hash,
-  Checkpoint,
-  ContResult,
-  ISpace,
-  Match,
-  Result,
-  SoftCheckpoint
-}
+import coop.rchain.rspace.trace.Event
+import coop.rchain.rspace.{Blake2b256Hash, Checkpoint, ContResult, ISpace, Match, Result, SoftCheckpoint, internal}
 
 import scala.collection.SortedSet
 
@@ -58,4 +50,6 @@ class ISpaceStub[F[_]: Applicative, C, P, A, K] extends ISpace[F, C, P, A, K] {
   override def createSoftCheckpoint(): F[SoftCheckpoint[C, P, A, K]] = ???
 
   override def revertToSoftCheckpoint(checkpoint: SoftCheckpoint[C, P, A, K]): F[Unit] = ???
+
+  override def applyEventsAndCreateCheckpoint(events: Seq[(Blake2b256Hash, Vector[Event])]): F[Checkpoint] = ???
 }

@@ -5,17 +5,8 @@ import java.nio.file.Path
 
 import cats.Parallel
 import cats.effect.Sync
-import coop.rchain.rspace.{
-  util,
-  Blake2b256Hash,
-  DeleteContinuations,
-  DeleteData,
-  DeleteJoins,
-  HotStoreAction,
-  InsertContinuations,
-  InsertData,
-  InsertJoins
-}
+import cats.effect.concurrent.Ref
+import coop.rchain.rspace.{Blake2b256Hash, DeleteContinuations, DeleteData, DeleteJoins, HotStoreAction, InsertContinuations, InsertData, InsertJoins, util}
 import monix.eval.Task
 import org.scalatest.{FlatSpec, Matchers, OptionValues}
 
@@ -172,12 +163,14 @@ class HistoryRepositorySpec
 
     (for {
       _ <- pastRoots.commit(History.emptyRootHash)
+      map <- Ref.of[Task, Map[Blake2b256Hash, Set[Blake2b256Hash]]](Map.empty)
       repo = HistoryRepositoryImpl[Task, String, String, String, String](
         emptyHistory,
         pastRoots,
         inMemColdStore,
         emptyExporter,
-        emptyImporter
+        emptyImporter,
+        map
       )
       _ <- f(repo)
     } yield ()).runSyncUnsafe(20.seconds)

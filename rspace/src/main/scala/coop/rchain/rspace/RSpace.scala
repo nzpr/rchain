@@ -12,7 +12,7 @@ import coop.rchain.catscontrib._
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.metrics.Metrics.Source
 import coop.rchain.metrics.implicits._
-import coop.rchain.rspace.history.{Branch, HistoryRepository}
+import coop.rchain.rspace.history.{Branch, HistoryAction, HistoryRepository}
 import coop.rchain.rspace.internal.{ConsumeCandidate, _}
 import coop.rchain.rspace.trace._
 import coop.rchain.shared.{Cell, Log, Serialize}
@@ -224,6 +224,20 @@ class RSpace[F[_], C, P, A, K](
     for {
       changes     <- storeAtom.get().changes()
       nextHistory <- historyRepositoryAtom.get().checkpoint(changes.toList)
+      _           = historyRepositoryAtom.set(nextHistory)
+      _           <- createNewHotStore(nextHistory)(serializeK.toCodec)
+      log         = eventLog.take()
+      _           = eventLog.put(Seq.empty)
+      _           = produceCounter.take()
+      _           = produceCounter.put(Map.empty.withDefaultValue(0))
+      _           <- restoreInstalls()
+    } yield Checkpoint(nextHistory.history.root, log)
+
+  override def applyEventsAndCreateCheckpoint(
+      events: Seq[(Blake2b256Hash, Vector[Event])]
+  ): F[Checkpoint] =
+    for {
+      nextHistory <- historyRepositoryAtom.get().applyEventsAndCheckpoint(events)
       _           = historyRepositoryAtom.set(nextHistory)
       _           <- createNewHotStore(nextHistory)(serializeK.toCodec)
       log         = eventLog.take()

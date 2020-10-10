@@ -9,7 +9,7 @@ import coop.rchain.casper._
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.rholang.RuntimeManager._
-import coop.rchain.casper.util.{DagOperations, ProtoUtil}
+import coop.rchain.casper.util.{DagOperations, EventConverter, ProtoUtil}
 import coop.rchain.crypto.codec.Base16
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
@@ -21,6 +21,7 @@ import coop.rchain.rholang.interpreter.Runtime.BlockData
 import coop.rchain.shared.{Log, LogSource}
 import com.google.protobuf.ByteString
 import coop.rchain.crypto.signatures.Signed
+import coop.rchain.rspace.Blake2b256Hash
 import monix.eval.Coeval
 
 object InterpreterUtil {
@@ -243,25 +244,28 @@ object InterpreterUtil {
       for {
         _ <- Span[F].mark("before-compute-parents-post-state-find-multi-parents")
         _ <- Log[F].info(
-              s"replayIntoMergeBlock computed number of uncommon ancestors: ${blockMetasToApply.length}"
+              s"Computing preStateHah, initStateHash = ${PrettyPrinter
+                .buildString(initStateHash)}, blocks to merge: ${blockMetasToApply.length}"
             )
         _ <- Metrics[F].setGauge("uncommon_ancestors", blockMetasToApply.length.toLong)(
               ReplayIntoMergeBlockMetricsSource
             )
         _             <- Span[F].mark("before-compute-parents-post-state-get-blocks")
         blocksToApply <- blockMetasToApply.traverse(b => BlockStore[F].getUnsafe(b.blockHash))
-        _             <- Span[F].mark("before-compute-parents-post-state-replay")
-        replayResult <- blocksToApply.foldM(initStateHash) { (stateHash, block) =>
-                         (for {
-                           replayResult <- replayBlock(stateHash, block, dag, runtimeManager)
-                         } yield replayResult.leftMap[Throwable] { status =>
-                           val parentHashes =
-                             parents.map(p => Base16.encode(p.blockHash.toByteArray).take(8))
-                           new Exception(
-                             s"Failed status while computing post state of $parentHashes: $status"
-                           )
-                         }).rethrow
-                       }
+        eventLogsToApply = blocksToApply.map(
+          b =>
+            (
+              Blake2b256Hash.fromByteString(b.body.state.postStateHash),
+              (b.body.deploys.flatMap(_.deployLog) ++ b.body.systemDeploys.flatMap(_.eventList))
+                .map(EventConverter.toRspaceEvent)
+                .toVector
+            )
+        )
+        _ <- Span[F].mark("before-compute-parents-post-state-replay")
+        replayResult <- runtimeManager.applyEventLog(
+                         initStateHash,
+                         eventLogsToApply
+                       )
       } yield replayResult
     }
 

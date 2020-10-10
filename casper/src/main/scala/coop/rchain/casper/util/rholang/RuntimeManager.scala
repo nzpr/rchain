@@ -39,6 +39,7 @@ import coop.rchain.rholang.interpreter.errors.BugFoundError
 import coop.rchain.rholang.interpreter.{EvaluateResult, Interpreter, Reduce, RhoType, Runtime}
 import coop.rchain.rspace
 import coop.rchain.rspace.{Blake2b256Hash, RSpace, ReplayException}
+import coop.rchain.rspace.trace.{Event => RSpaceEvent}
 import coop.rchain.shared.Log
 import monix.execution.Scheduler
 import monix.execution.atomic.AtomicAny
@@ -85,6 +86,10 @@ trait RuntimeManager[F[_]] {
   // Executes deploy as user deploy with immediate rollback
   def playExploratoryDeploy(term: String, startHash: StateHash): F[Seq[Par]]
   def getShardConfig(stateHash: StateHash): F[CasperShardConf]
+  def applyEventLog(
+      stateHash: StateHash,
+      eventLog: Seq[(Blake2b256Hash, Vector[RSpaceEvent])]
+  ): F[StateHash]
 }
 
 final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: ContextShift: Parallel](
@@ -107,6 +112,32 @@ final case class RuntimeManagerImpl[F[_]: Concurrent: Metrics: Span: Log: Contex
   private val systemDeployConsumeAllPattern =
     BindPattern(List(toPar(Expr(EVarBody(EVar(Var(FreeVar(0))))))), freeCount = 1)
   private val emptyContinuation = TaggedContinuation()
+
+  /**
+    *
+    * @param stateHash - base state hash
+    * @param eventLog - map {stateHash where eventLog is applied (created via replay)} -> {eventLog}
+    * @return
+    */
+  def applyEventLog(
+      stateHash: StateHash,
+      eventLog: Seq[(Blake2b256Hash, Vector[RSpaceEvent])]
+  ): F[StateHash] =
+    withResetRuntimeLock(stateHash) { r =>
+      val replaySpace = r.space
+        .asInstanceOf[rspace.RSpace[
+          F,
+          Par,
+          BindPattern,
+          ListParWithRandom,
+          TaggedContinuation
+        ]]
+      for {
+        cp <- replaySpace.applyEventsAndCreateCheckpoint(
+               eventLog
+             )
+      } yield cp.root.toByteString
+    }
 
   private def evaluateSystemSource[S <: SystemDeploy](
       runtime: Runtime[F]

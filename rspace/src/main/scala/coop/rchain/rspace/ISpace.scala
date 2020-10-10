@@ -1,7 +1,9 @@
 package coop.rchain.rspace
 
 import cats.Id
+import coop.rchain.rspace.history.{HistoryAction, HistoryRepository}
 import coop.rchain.rspace.internal._
+import coop.rchain.rspace.trace.Event
 
 final case class Result[C, A](
     channel: C,
@@ -31,6 +33,10 @@ trait ISpace[F[_], C, P, A, K] extends Tuplespace[F, C, P, A, K] {
     * @return A [[Checkpoint]]
     */
   def createCheckpoint(): F[Checkpoint]
+
+  def applyEventsAndCreateCheckpoint(
+      events: Seq[(Blake2b256Hash, Vector[Event])]
+  ): F[Checkpoint]
 
   /** Resets the store to the given root.
     *
