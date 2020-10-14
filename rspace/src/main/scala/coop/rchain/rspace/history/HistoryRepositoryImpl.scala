@@ -263,59 +263,62 @@ final case class HistoryRepositoryImpl[F[_]: Sync: Parallel, C, P, A, K](
       eventsPerStateHash: Seq[(Blake2b256Hash, Vector[Event])]
   ): F[List[HistoryAction]] = {
     import cats.instances.list._
-    eventsPerStateHash.toList.foldLeftM(List.empty[HistoryAction]) { (acc, e) =>
-      val rootThatHasEvents = e._1
-      val events            = e._2
-      val (produces, consumes, commEvents) =
-        events.foldLeft((Vector.empty[Produce], Vector.empty[Consume], Vector.empty[COMM])) {
-          (acc, event) =>
-            event match {
-              case p: Produce => acc.copy(acc._1 :+ p, acc._2, acc._3)
-              case c: Consume => acc.copy(acc._1, acc._2 :+ c, acc._3)
-              case cm: COMM   => acc.copy(acc._1, acc._2, acc._3 :+ cm)
-            }
-        }
-      val allProduces = produces ++ commEvents.flatMap(_.produces).filterNot(produces.contains)
-      val allConsumes = consumes ++ commEvents.map(_.consume).filterNot(consumes.contains)
-      // Channels used in computation
-      val channelsUsed = allProduces.map(_.channelsHash) ++ allConsumes.flatMap(_.channelsHashes)
+    eventsPerStateHash.toList
+      .parTraverse { e =>
+        val rootThatHasEvents = e._1
+        val events            = e._2
+        val (produces, consumes, commEvents) =
+          events.foldLeft((Vector.empty[Produce], Vector.empty[Consume], Vector.empty[COMM])) {
+            (acc, event) =>
+              event match {
+                case p: Produce => acc.copy(acc._1 :+ p, acc._2, acc._3)
+                case c: Consume => acc.copy(acc._1, acc._2 :+ c, acc._3)
+                case cm: COMM   => acc.copy(acc._1, acc._2, acc._3 :+ cm)
+              }
+          }
+        val allProduces = produces ++ commEvents.flatMap(_.produces).filterNot(produces.contains)
+        val allConsumes = consumes ++ commEvents.map(_.consume).filterNot(consumes.contains)
+        // Channels used in computation
+        val channelsUsed = allProduces.map(_.channelsHash) ++ allConsumes.flatMap(_.channelsHashes)
 
-      for {
-        // get historyRepository instance positioned at root where events should be applied
-        historyThatHasEvents <- reset(rootThatHasEvents)
+        for {
+          // get historyRepository instance positioned at root where events should be applied
+          historyThatHasEvents <- reset(rootThatHasEvents)
 
-        // get channels that should be changed in HistoryStore (channelsAffected).
-        // Some of channels might represents intermediate computation, so we use map maintained by replay
-        logChannelToHistoryChannelMap <- channelsHashesMappings.get
-        channelsAffected              = channelsUsed.filter(logChannelToHistoryChannelMap.keySet.contains)
-        chanAndHistoryKeys = channelsAffected.flatMap(
-          chan => logChannelToHistoryChannelMap(chan).map(histKey => (chan, histKey))
-        )
-        _ = println(
-          s"Attempting to apply events from state ${Base16.encode(rootThatHasEvents.toByteString.toByteArray)}." +
-            s"(${channelsUsed.size} channels in IOEvents. ${chanAndHistoryKeys.size} corresponding channels (Join, Data, Continuation) in history found in replay map."
-        )
+          // get channels that should be changed in HistoryStore (channelsAffected).
+          // Some of channels might represents intermediate computation, so we use map maintained by replay
+          logChannelToHistoryChannelMap <- channelsHashesMappings.get
+          channelsAffected              = channelsUsed.filter(logChannelToHistoryChannelMap.keySet.contains)
+          chanAndHistoryKeys = channelsAffected.flatMap(
+            chan => logChannelToHistoryChannelMap(chan).map(histKey => (chan, histKey))
+          )
+          _ = println(
+            s"Attempting to apply events from state ${Base16.encode(rootThatHasEvents.toByteString.toByteArray)}." +
+              s"(${channelsUsed.size} channels in IOEvents. ${chanAndHistoryKeys.size} corresponding channels (Join, Data, Continuation) in history found in replay map."
+          )
 
-        keyPathsAndHashes <- chanAndHistoryKeys
-                              .map(_._2)
-                              .toList
-                              .foldM(Seq.empty[(KeyPath, Option[Blake2b256Hash])]) {
-                                (acc, historyHash) =>
-                                  for {
-                                    leafHash <- historyThatHasEvents.getDataHashAtPath(historyHash)
-                                  } yield acc :+ (historyHash.bytes.toSeq.toList, leafHash)
-                              }
-        (existingHashesAtPaths, nonExistingHashesAtPaths) = keyPathsAndHashes.partition(
-          _._2.nonEmpty
-        )
+          keyPathsAndHashes <- chanAndHistoryKeys
+                                .map(_._2)
+                                .toList
+                                .foldM(Seq.empty[(KeyPath, Option[Blake2b256Hash])]) {
+                                  (acc, historyHash) =>
+                                    for {
+                                      leafHash <- historyThatHasEvents.getDataHashAtPath(
+                                                   historyHash
+                                                 )
+                                    } yield acc :+ (historyHash.bytes.toSeq.toList, leafHash)
+                                }
+          (existingHashesAtPaths, nonExistingHashesAtPaths) = keyPathsAndHashes.partition(
+            _._2.nonEmpty
+          )
 
-        deleteActions = nonExistingHashesAtPaths.map(keyNhash => DeleteAction(keyNhash._1))
+          deleteActions = nonExistingHashesAtPaths.map(keyNhash => DeleteAction(keyNhash._1))
 
-        insertActions = existingHashesAtPaths.toList.map { keyNhash =>
-          {
-            val dataHash = keyNhash._2.get
-            val keyPath  = keyNhash._1
-            InsertAction(keyPath, dataHash)
+          insertActions = existingHashesAtPaths.toList.map { keyNhash =>
+            {
+              val dataHash = keyNhash._2.get
+              val keyPath  = keyNhash._1
+              InsertAction(keyPath, dataHash)
 //                            for {
 //                              // TODO Probably dataHash will be changed because we might have some conflicts (mergeable ones, but that required to modify data in cold store)
 //                              data <- leafStore.get(dataHash)
@@ -347,13 +350,14 @@ final case class HistoryRepositoryImpl[F[_]: Sync: Parallel, C, P, A, K](
 //                                DeleteAction(keyPath)
 //                              } else InsertAction(keyPath, dataHash)
 //                            } yield r
+            }
           }
-        }
-        _ = println(
-          s"${deleteActions.size} deleteActions and ${insertActions.size} insert actions created from "
-        )
-      } yield acc ++ (deleteActions ++ insertActions).distinct
-    }
+          _ = println(
+            s"${deleteActions.size} deleteActions and ${insertActions.size} insert actions created"
+          )
+        } yield (deleteActions ++ insertActions)
+      }
+      .map(_.flatten.groupBy(_.key).values.map(_.head).toList)
   }
 
   private def storeLeaves(leafs: List[Result]): F[List[HistoryAction]] = {

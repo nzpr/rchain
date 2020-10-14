@@ -5,7 +5,6 @@ import java.nio.file.{Files, Path}
 
 import cats.data._
 import cats.implicits._
-
 import coop.rchain.shared.{Log, _}
 import coop.rchain.shared.GracefulClose._
 import coop.rchain.shared.PathOps._
@@ -14,9 +13,10 @@ import coop.rchain.comm.PeerNode
 import coop.rchain.comm.protocol.routing._
 import coop.rchain.comm.rp.ProtocolHelper
 import coop.rchain.comm.transport.PacketOps._
-
 import monix.eval.Task
 import monix.reactive.Observable
+
+import scala.collection.concurrent.TrieMap
 
 final case class Header(
     sender: PeerNode,
@@ -40,9 +40,11 @@ final case class Streamed(
     header: Option[Header] = None,
     readSoFar: Long = 0,
     circuit: Circuit = Closed,
-    path: Path,
-    fos: FileOutputStream
-)
+    path: Path
+    //    fos: FileOutputStream
+) {
+  def key = path.toString
+}
 
 object StreamHandler {
 
@@ -76,43 +78,52 @@ object StreamHandler {
     }
   }
 
+  final case class ChunkItem(parts: Chain[Array[Byte]])
+
   def handleStream(
       folder: Path,
       stream: Observable[Chunk],
-      circuitBreaker: CircuitBreaker
+      circuitBreaker: CircuitBreaker,
+      chunks: TrieMap[String, Array[Byte]]
   )(implicit log: Log[Task]): Task[Either[StreamError, StreamMessage]] =
     init(folder)
       .bracketE { initStmd =>
-        (collect(initStmd, stream, circuitBreaker) >>= toResult).value
+        (collect(initStmd, stream, circuitBreaker, chunks) >>= toResult).value
       }({
         // failed while collecting stream
         case (stmd, Right(Left(_))) =>
           Log[Task].warn("Failed collecting stream.") >>
-            gracefullyClose[Task](stmd.fos).as(()) >>
-            stmd.path.deleteSingleFile[Task]
+            //            gracefullyClose[Task](stmd.fos).as(()) >>
+            //            stmd.path.deleteSingleFile[Task]
+            Task.delay(chunks.remove(stmd.key)).void
         // should not happend (errors handled witin bracket) but covered for safety
         case (stmd, Left(_)) =>
           Log[Task].error(
             "Stream collection ended unexpected way. Please contact RNode code maintainer."
           ) >>
-            gracefullyClose[Task](stmd.fos).as(()) >>
-            stmd.path.deleteSingleFile[Task]
+            //            gracefullyClose[Task](stmd.fos).as(()) >>
+            //            stmd.path.deleteSingleFile[Task]
+            Task.delay(chunks.remove(stmd.key)).void
         // succesfully collected
-        case (stmd, _) =>
-          Log[Task].debug("Stream collected.") >>
-            gracefullyClose[Task](stmd.fos).as(())
+        case (_, _) =>
+          Log[Task].debug("Stream collected.")
+        //            gracefullyClose[Task](stmd.fos).as(())
+        //            Task.delay(chunks.remove(stmd.key)).void
       })
       .attempt
       .map(_.leftMap(StreamError.unexpected).flatten)
 
   private def init(folder: Path): Task[Streamed] =
-    createPacketFile[Task](folder, "_packet_streamed.bts")
-      .map { case (file, fos) => Streamed(fos = fos, path = file) }
+    createPacketInMem[Task](folder, "_packet_streamed.bts")
+      .map { file =>
+        Streamed(path = file)
+      }
 
   private def collect(
       init: Streamed,
       stream: Observable[Chunk],
-      circuitBreaker: CircuitBreaker
+      circuitBreaker: CircuitBreaker,
+      chunks: TrieMap[String, Array[Byte]]
   ): EitherT[Task, StreamError, Streamed] = {
 
     def collectStream: Task[Streamed] =
@@ -133,8 +144,15 @@ object StreamHandler {
 
         case (stmd, Chunk(Chunk.Content.Data(ChunkData(newData)))) =>
           val array = newData.toByteArray
-          stmd.fos.write(array)
-          stmd.fos.flush()
+
+          //          stmd.fos.write(array)
+          //          stmd.fos.flush()
+
+          // Write data to cache
+          val ch     = chunks.getOrElseUpdate(stmd.key, Array[Byte]())
+          val newVal = ch ++ array
+          chunks.update(stmd.key, newVal)
+
           val readSoFar = stmd.readSoFar + array.length
           val newStmd   = stmd.copy(readSoFar = readSoFar)
           val circuit   = circuitBreaker(newStmd)
@@ -150,9 +168,9 @@ object StreamHandler {
       }
 
     EitherT(collectStream.attempt.map {
-      case Right(Streamed(_, _, Opened(error), _, _)) => error.asLeft
-      case Right(stmd)                                => stmd.asRight
-      case Left(t)                                    => StreamError.unexpected(t).asLeft
+      case Right(Streamed(_, _, Opened(error), _)) => error.asLeft
+      case Right(stmd)                             => stmd.asRight
+      case Left(t)                                 => StreamError.unexpected(t).asLeft
     })
 
   }
@@ -168,8 +186,7 @@ object StreamHandler {
             Some(Header(sender, packetType, contentLength, _, compressed)),
             readSoFar,
             _,
-            path,
-            _
+            path
             ) =>
           val result =
             StreamMessage(sender, packetType, path, compressed, contentLength).asRight[StreamError]
@@ -181,8 +198,10 @@ object StreamHandler {
     })
   }
 
-  def restore(msg: StreamMessage)(implicit logger: Log[Task]): Task[Either[Throwable, Blob]] =
-    (fetchContent(msg.path).attempt >>= {
+  def restore(msg: StreamMessage, chunks: TrieMap[String, Array[Byte]])(
+      implicit logger: Log[Task]
+  ): Task[Either[Throwable, Blob]] =
+    (fetchContent(msg.path, chunks).attempt >>= {
       case Left(ex) => logger.error("Could not read streamed data from file", ex).as(Left(ex))
       case Right(content) =>
         decompressContent(content, msg.compressed, msg.contentLength).attempt >>= {
@@ -190,9 +209,16 @@ object StreamHandler {
           case Right(decompressedContent) =>
             Right(ProtocolHelper.blob(msg.sender, msg.typeId, decompressedContent)).pure[Task]
         }
-    }) >>= (res => msg.path.deleteSingleFile[Task].as(res))
+    }) >>=
+      //      (res => msg.path.deleteSingleFile[Task].as(res))
+      (res => Task.delay(chunks.remove(msg.path.toString)).as(res))
 
-  private def fetchContent(path: Path): Task[Array[Byte]] = Task.delay(Files.readAllBytes(path))
+  private def fetchContent(path: Path, chunks: TrieMap[String, Array[Byte]]): Task[Array[Byte]] =
+    //    Task.delay(Files.readAllBytes(path))
+    Task.delay {
+      chunks(path.toString)
+    }
+
   private def decompressContent(
       raw: Array[Byte],
       compressed: Boolean,

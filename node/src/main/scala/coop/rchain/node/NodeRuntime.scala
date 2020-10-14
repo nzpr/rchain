@@ -69,6 +69,8 @@ import monix.eval.Task
 import monix.execution.Scheduler
 import org.lmdbjava.Env
 
+import scala.collection.concurrent.TrieMap
+
 @SuppressWarnings(Array("org.wartremover.warts.NonUnitStatements"))
 class NodeRuntime private[node] (
     nodeConf: NodeConf,
@@ -455,13 +457,15 @@ class NodeRuntime private[node] (
       _ <- Log[TaskEnv].info(
             s"Kademlia RPC server started at $host:${servers.kademliaRPCServer.port}"
           )
+      chunksMap = TrieMap[String, Array[Byte]]()
       _ <- servers.transportServer
             .start(
               pm => HandleMessages.handle[TaskEnv](pm).run(NodeCallCtx.init),
               blob =>
                 packetHandler
                   .handlePacket(blob.sender, blob.packet)
-                  .run(NodeCallCtx.init)
+                  .run(NodeCallCtx.init),
+              chunksMap
             )
             .toReaderT
       address = local.toAddress

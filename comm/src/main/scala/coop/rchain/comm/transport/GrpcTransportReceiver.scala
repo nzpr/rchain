@@ -5,6 +5,10 @@ import java.nio.file.Path
 import scala.concurrent.duration._
 
 import cats.implicits._
+import cats.data.Chain
+import coop.rchain.comm.transport.StreamHandler.ChunkItem
+import coop.rchain.store.KeyValueStoreManager
+import scala.collection.concurrent.TrieMap
 
 import coop.rchain.comm.{CommMetricsSource, PeerNode}
 import coop.rchain.comm.protocol.routing._
@@ -35,7 +39,8 @@ object GrpcTransportReceiver {
       tellBuffer: LimitedBuffer[Send],
       blobBuffer: LimitedBuffer[StreamMessage],
       askTimeout: FiniteDuration = 5.second,
-      tempFolder: Path
+      tempFolder: Path,
+      chunks: TrieMap[String, Array[Byte]]
   )(
       implicit scheduler: Scheduler,
       rPConfAsk: RPConfAsk[Task],
@@ -72,7 +77,7 @@ object GrpcTransportReceiver {
           import StreamHandler._
           import StreamError.StreamErrorToMessage
 
-          handleStream(tempFolder, observable, circuitBreaker) >>= {
+          handleStream(tempFolder, observable, circuitBreaker, chunks) >>= {
             case Left(error @ StreamError.Unexpected(t)) =>
               logger.error(error.message, t).as(internalServerError(error.message))
             case Left(error) =>
@@ -92,7 +97,8 @@ object GrpcTransportReceiver {
                     List(
                       logger.debug(s"Dropped packet ${msg.path}"),
                       metrics.incrementCounter("dropped.packets"),
-                      msg.path.deleteSingleFile[Task]
+                      Task.delay(chunks.remove(msg.path.toString))
+                      //msg.path.deleteSingleFile[Task]
                     ).sequence
                   ) >> rPConfAsk.reader(c => ack(c.local))
           }

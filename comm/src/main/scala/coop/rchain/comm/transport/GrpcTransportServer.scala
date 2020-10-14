@@ -19,10 +19,15 @@ import io.netty.handler.ssl._
 import monix.eval.Task
 import monix.execution.{Cancelable, Scheduler}
 
+import coop.rchain.comm.transport.StreamHandler.ChunkItem
+import coop.rchain.store.KeyValueStoreManager
+import scala.collection.concurrent.TrieMap
+
 trait TransportLayerServer[F[_]] {
   def receive(
       dispatch: Protocol => F[CommunicationResponse],
-      handleStreamed: Blob => F[Unit]
+      handleStreamed: Blob => F[Unit],
+      chunks: TrieMap[String, Array[Byte]]
   ): F[Cancelable]
 }
 
@@ -71,7 +76,8 @@ class GrpcTransportServer(
 
   def receive(
       dispatch: Protocol => Task[CommunicationResponse],
-      handleStreamed: Blob => Task[Unit]
+      handleStreamed: Blob => Task[Unit],
+      chunks: TrieMap[String, Array[Byte]]
   ): Task[Cancelable] = {
 
     val dispatchSend: Send => Task[Unit] =
@@ -79,7 +85,7 @@ class GrpcTransportServer(
 
     val dispatchBlob: StreamMessage => Task[Unit] =
       msg =>
-        (StreamHandler.restore(msg) >>= {
+        (StreamHandler.restore(msg, chunks) >>= {
           case Left(ex) =>
             Log[Task].error("Could not restore data from file while handling stream", ex)
           case Right(blob) =>
@@ -98,7 +104,8 @@ class GrpcTransportServer(
                    maxStreamMessageSize,
                    tellBuffer,
                    blobBuffer,
-                   tempFolder = tempFolder
+                   tempFolder = tempFolder,
+                   chunks = chunks
                  )
       tellConsumer <- Task.delay(
                        tellBuffer
@@ -153,13 +160,14 @@ class TransportServer(server: GrpcTransportServer) {
 
   def start(
       dispatch: Protocol => Task[CommunicationResponse],
-      handleStreamed: Blob => Task[Unit]
+      handleStreamed: Blob => Task[Unit],
+      chunks: TrieMap[String, Array[Byte]]
   ): Task[Unit] =
     ref.get() match {
       case Some(_) => Task.unit
       case _ =>
         server
-          .receive(dispatch, handleStreamed)
+          .receive(dispatch, handleStreamed, chunks)
           .foreachL { cancelable =>
             ref
               .getAndSet(Some(cancelable))

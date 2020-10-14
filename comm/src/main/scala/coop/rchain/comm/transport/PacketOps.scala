@@ -58,4 +58,9 @@ object PacketOps {
     val hex  = Base16.encode(bytes)
     s"${date}_$hex"
   }
+
+  def createPacketInMem[F[_]: Sync](folder: Path, postfix: String): F[Path] =
+    for {
+      file <- Sync[F].delay(folder.resolve(timestamp + postfix))
+    } yield file
 }
