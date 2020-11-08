@@ -44,8 +44,7 @@ class Initializing[F[_]
   /* Storage */     : BlockStore: BlockDagStorage: LastFinalizedStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
   /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
 (
-    shardId: String,
-    finalizationRate: Int,
+    casperShardConf: CasperShardConf,
     validatorId: Option[ValidatorIdentity],
     theInit: F[Unit],
     blockMessageQueue: Queue[F, BlockMessage],
@@ -235,9 +234,8 @@ class Initializing[F[_]
       casper <- MultiParentCasper
                  .hashSetCasper[F](
                    validatorId,
-                   ab,
-                   shardId,
-                   finalizationRate
+                   casperShardConf,
+                   ab
                  )
       _ <- Log[F].info("MultiParentCasper instance created.")
       _ <- transitionToRunning[F](
