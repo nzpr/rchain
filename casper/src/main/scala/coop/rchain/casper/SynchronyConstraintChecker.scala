@@ -2,8 +2,10 @@ package coop.rchain.casper
 
 import cats.effect.Sync
 import cats.implicits._
+import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagRepresentation
+import coop.rchain.casper.blocks.proposer.{CheckProposeConstraintsResult, NotEnoughNewBlocks}
 import coop.rchain.casper.protocol.{BlockMessage, Justification}
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ProtoUtil
@@ -11,9 +13,7 @@ import coop.rchain.casper.util.rholang.RuntimeManager
 import coop.rchain.models.Validator.Validator
 import coop.rchain.shared.Log
 
-final class SynchronyConstraintChecker[F[_]: Sync: BlockStore: Log](
-    synchronyConstraintThreshold: Double
-) {
+final class SynchronyConstraintChecker[F[_]: Sync: BlockStore: Log] {
   private def calculateSeenSendersSince(
       lastProposed: BlockMessage,
       dag: BlockDagRepresentation[F]
@@ -33,20 +33,23 @@ final class SynchronyConstraintChecker[F[_]: Sync: BlockStore: Log](
     } yield seenSendersSince
 
   def check(
-      dag: BlockDagRepresentation[F],
+      s: CasperSnapshot[F],
       runtimeManager: RuntimeManager[F],
+      // TODO having genesis is a weird way to check, remove
       genesis: BlockMessage,
-      validator: Validator
-  ): F[Boolean] =
-    dag.latestMessageHash(validator).flatMap {
+      validatorIdentity: ValidatorIdentity
+  ): F[CheckProposeConstraintsResult] = {
+    val synchronyConstraintThreshold = s.onChainState.shardConf.synchronyConstraintThreshold
+    val validator                    = ByteString.copyFrom(validatorIdentity.publicKey.bytes)
+    s.dag.latestMessageHash(validator).flatMap {
       case Some(lastProposedBlockHash) if lastProposedBlockHash == genesis.blockHash =>
         // The node has not proposed any block yet and hence allowed to propose once
-        true.pure[F]
+        CheckProposeConstraintsResult.success.pure[F]
       case Some(lastProposedBlockHash) =>
         for {
           lastProposedBlock <- BlockStore[F].getUnsafe(lastProposedBlockHash)
           // Guaranteed to be present since last proposed block was present
-          seenSenders            <- calculateSeenSendersSince(lastProposedBlock, dag)
+          seenSenders            <- calculateSeenSendersSince(lastProposedBlock, s.dag)
           lastProposedTuplespace = ProtoUtil.postStateHash(lastProposedBlock)
           bonds                  <- runtimeManager.computeBonds(lastProposedTuplespace)
           activeValidators       <- runtimeManager.getActiveValidators(lastProposedTuplespace)
@@ -68,20 +71,22 @@ final class SynchronyConstraintChecker[F[_]: Sync: BlockStore: Log](
                 s"Seen ${seenSenders.size} senders with weight $sendersWeight out of total $otherValidatorsWeight " +
                   s"(${synchronyConstraintValue} out of $synchronyConstraintThreshold needed)"
               )
-        } yield synchronyConstraintValue >= synchronyConstraintThreshold
+        } yield
+          if (synchronyConstraintValue >= synchronyConstraintThreshold)
+            CheckProposeConstraintsResult.success
+          else
+            NotEnoughNewBlocks
       case None =>
-        Sync[F].raiseError[Boolean](
-          new IllegalStateException("Validator does not have a latest message")
-        )
+        CheckProposeConstraintsResult.success.pure[F]
+//        Sync[F].raiseError[CheckProposeConstraintsResult](
+//          new IllegalStateException("Validator does not have a latest message")
+//        )
     }
+  }
+
 }
 
 object SynchronyConstraintChecker {
-  def apply[F[_]](implicit ev: SynchronyConstraintChecker[F]): SynchronyConstraintChecker[F] =
-    ev
-
-  def apply[F[_]: Sync: BlockStore: Log](
-      synchronyConstraintThreshold: Double
-  ): SynchronyConstraintChecker[F] =
-    new SynchronyConstraintChecker[F](synchronyConstraintThreshold)
+  def apply[F[_]: Sync: BlockStore: Log]: SynchronyConstraintChecker[F] =
+    new SynchronyConstraintChecker[F]
 }
