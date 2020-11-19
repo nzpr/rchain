@@ -16,8 +16,10 @@ import coop.rchain.blockstorage.dag.{BlockDagFileStorage, BlockDagKeyValueStorag
 import coop.rchain.blockstorage.deploy.LMDBDeployStorage
 import coop.rchain.blockstorage.finality.LastFinalizedFileStorage
 import coop.rchain.blockstorage.util.io.IOError
+import coop.rchain.casper.blocks.BlockProcessor
 import coop.rchain.casper.engine.EngineCell._
 import coop.rchain.casper.engine.{BlockRetriever, _}
+import coop.rchain.casper.protocol.BlockMessage
 import coop.rchain.casper.protocol.deploy.v1.DeployServiceV1GrpcMonix
 import coop.rchain.casper.protocol.propose.v1.ProposeServiceV1GrpcMonix
 import coop.rchain.casper.state.instances.BlockStateManagerImpl
@@ -51,6 +53,7 @@ import coop.rchain.node.diagnostics.{
   UdpInfluxDBReporter
 }
 import coop.rchain.node.effects.{EventConsumer, RchainEvents}
+import coop.rchain.node.instances.BlockProcessorInstance
 import coop.rchain.node.model.repl.ReplGrpcMonix
 import coop.rchain.node.state.instances.RNodeStateManagerImpl
 import coop.rchain.node.web._
@@ -63,6 +66,8 @@ import coop.rchain.shared.PathOps._
 import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueStoreManager
+import fs2.concurrent.Queue
+import io.grpc.ManagedChannel
 import kamon._
 import kamon.system.SystemMetrics
 import kamon.zipkin.ZipkinReporter
@@ -251,7 +256,10 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
         casperLaunch,
         reportingCasper,
         webApi,
-        adminWebApi
+        adminWebApi,
+        blockProcessor,
+        blockProcessorState,
+        blockProcessorQueue
       ) = result
 
       // 4. launch casper
@@ -279,7 +287,10 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
           runtimeCleanup,
           reportingCasper,
           webApi,
-          adminWebApi
+          adminWebApi,
+          blockProcessor,
+          blockProcessorState,
+          blockProcessorQueue
         )
       }
       _ <- handleUnrecoverableErrors(program)
@@ -308,8 +319,12 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
       runtimeCleanup: Cleanup[F],
       reportingCasper: ReportingCasper[F],
       webApi: WebApi[F],
-      adminWebApi: AdminWebApi[F]
+      adminWebApi: AdminWebApi[F],
+      blockProcessor: BlockProcessor[F],
+      blockProcessingState: Ref[F, Set[BlockHash]],
+      incomingBlocksQueue: Queue[F, (Casper[F], BlockMessage)]
   )(
+      )(
       implicit
       time: Time[F],
       rpConfState: RPConfState[F],
@@ -429,6 +444,15 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
             .defer(casperLoop.forever)
             .toTask
             .executeOn(loopScheduler)
+            .fromTask
+            .start
+      _ <- Log[F].info("Starting block processor.")
+      _ <- BlockProcessorInstance
+            .create(incomingBlocksQueue, blockProcessor, blockProcessingState)
+            .compile
+            .drain
+            .toTask
+            .executeOn(scheduler)
             .fromTask
             .start
       _ <- Sync[F]
@@ -751,7 +775,10 @@ object NodeRuntime {
         CasperLaunch[F],
         ReportingCasper[F],
         WebApi[F],
-        AdminWebApi[F]
+        AdminWebApi[F],
+        BlockProcessor[F],
+        Ref[F, Set[BlockHash]],
+        Queue[F, (Casper[F], BlockMessage)]
     )
   ] =
     for {
@@ -900,9 +927,22 @@ object NodeRuntime {
       }
       (rnodeStateManager, rspaceStateManager) = stateManagers
       // Engine dynamic reference
-      engineCell   <- EngineCell.init[F]
-      envVars      = EnvVars.envVars[F]
-      raiseIOError = IOError.raiseIOErrorThroughSync[F]
+      engineCell          <- EngineCell.init[F]
+      envVars             = EnvVars.envVars[F]
+      raiseIOError        = IOError.raiseIOErrorThroughSync[F]
+      blockProcessorQueue <- Queue.unbounded[F, (Casper[F], BlockMessage)]
+      // block processing state - set of items currently in processing
+      blockProcessorStateRef <- Ref.of[F, Set[BlockHash]](
+                                 Set.empty[BlockHash]
+                               )
+      blockProcessor = {
+        implicit val bd = blockDagStorage
+        implicit val br = blockRetriever
+        implicit val cu = commUtil
+        implicit val bs = blockStore
+        implicit val cb = casperBufferStorage
+        BlockProcessor[F]
+      }
       casperLaunch = {
         implicit val bs     = blockStore
         implicit val bd     = blockDagStorage
@@ -928,6 +968,8 @@ object NodeRuntime {
         implicit val rsm    = rspaceStateManager
 
         CasperLaunch.of[F](
+          blockProcessorQueue,
+          blockProcessorStateRef,
           conf.casper,
           conf.protocolClient.trimState,
           conf.protocolServer.enableStateExporter
@@ -1021,7 +1063,10 @@ object NodeRuntime {
       casperLaunch,
       reportingCasper,
       webApi,
-      adminWebApi
+      adminWebApi,
+      blockProcessor,
+      blockProcessorStateRef,
+      blockProcessorQueue
     )
 
   final case class APIServers(
