@@ -363,10 +363,12 @@ object RSpace {
     implicit val ca = sa.toCodec
     implicit val ck = sk.toCodec
 
-    val coldStore    = StoreConfig(dataDir.resolve("cold"), mapSize)
-    val historyStore = StoreConfig(dataDir.resolve("history"), mapSize)
-    val rootsStore   = StoreConfig(dataDir.resolve("roots"), mapSize)
-    val config       = LMDBRSpaceStorageConfig(coldStore, historyStore, rootsStore)
+    val coldStore        = StoreConfig(dataDir.resolve("cold"), mapSize)
+    val historyStore     = StoreConfig(dataDir.resolve("history"), mapSize)
+    val rootsStore       = StoreConfig(dataDir.resolve("roots"), mapSize)
+    val channelHashStore = StoreConfig(dataDir.resolve("channels"), mapSize)
+
+    val config = LMDBRSpaceStorageConfig(coldStore, historyStore, rootsStore, channelHashStore)
 
     def checkCreateDir(dir: Path): F[Unit] =
       for {
@@ -378,6 +380,7 @@ object RSpace {
       _ <- checkCreateDir(coldStore.path)
       _ <- checkCreateDir(historyStore.path)
       _ <- checkCreateDir(rootsStore.path)
+      _ <- checkCreateDir(channelHashStore.path)
       historyReader <- HistoryRepositoryInstances
                         .lmdbRepository[F, C, P, A, K](config)
       store <- HotStore.empty(historyReader)
