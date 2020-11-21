@@ -1094,7 +1094,8 @@ object NodeRuntime {
             if (proposer.isDefined) proposerStateRef.some else None,
             scheduler,
             conf.apiServer.maxBlocksLimit,
-            conf.devMode
+            conf.devMode,
+            conf.autopropose
           )
       }
       casperLoop = {
@@ -1132,7 +1133,13 @@ object NodeRuntime {
         implicit val sp = span
         implicit val or = oracle
         implicit val bs = blockStore
-        new WebApiImpl[F](conf.apiServer.maxBlocksLimit, conf.devMode, rnodeStateManager)
+        new WebApiImpl[F](
+          conf.apiServer.maxBlocksLimit,
+          conf.devMode,
+          conf.autopropose,
+          proposerQueue,
+          rnodeStateManager
+        )
       }
       adminWebApi = {
         implicit val ec     = engineCell
@@ -1177,7 +1184,8 @@ object NodeRuntime {
       proposerStateRef: Option[Ref[F, ProposerState[F]]],
       scheduler: Scheduler,
       apiMaxBlocksLimit: Int,
-      devMode: Boolean
+      devMode: Boolean,
+      autopropose: Boolean
   )(
       implicit
       blockStore: BlockStore[F],
@@ -1194,7 +1202,13 @@ object NodeRuntime {
     implicit val s: Scheduler = scheduler
     val repl                  = ReplGrpcService(runtime, s)
     val deploy =
-      DeployGrpcServiceV1(apiMaxBlocksLimit, reportingCasper, devMode)
+      DeployGrpcServiceV1(
+        apiMaxBlocksLimit,
+        reportingCasper,
+        devMode,
+        autopropose,
+        proposerQueue.get
+      )
     val propose = ProposeGrpcServiceV1(proposerQueue, proposerStateRef)
     APIServers(repl, propose, deploy)
   }
