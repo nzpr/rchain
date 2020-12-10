@@ -211,6 +211,9 @@ final class BlockDagFileStorage[F[_]: Concurrent: Sync: Log: RaiseIOError] priva
 
     def invalidBlocks: F[Set[BlockMetadata]] =
       invalidBlocksSet.pure[F]
+
+    override def parents(vertex: BlockHash): F[Option[Set[BlockHash]]] =
+      lookup(vertex).map(_.map(_.parents.toSet))
   }
 
   private object FileEquivocationsTracker extends EquivocationsTracker[F] {
