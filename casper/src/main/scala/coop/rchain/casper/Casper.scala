@@ -59,7 +59,7 @@ trait Casper[F[_]] {
   def getValidator: F[Option[ValidatorIdentity]]
   def getVersion: F[Long]
 
-  def validate(b: BlockMessage, dag: BlockDagRepresentation[F]): F[Either[BlockError, ValidBlock]]
+  def validate(b: BlockMessage, s: CasperSnapshot[F]): F[Either[BlockError, ValidBlock]]
   def handleValidBlock(block: BlockMessage): F[BlockDagRepresentation[F]]
   def handleInvalidBlock(
       block: BlockMessage,
@@ -100,6 +100,8 @@ object MultiParentCasper extends MultiParentCasperInstances {
   */
 final case class CasperSnapshot[F[_]](
     dag: BlockDagRepresentation[F],
+    lastFinalizedBlock: BlockHash,
+    lca: BlockHash,
     tips: IndexedSeq[BlockHash],
     parents: List[BlockMessage],
     justifications: Set[Justification],

@@ -134,7 +134,8 @@ lazy val shared = (project in file("shared"))
       lmdbjava,
       catsEffectLawsTest,
       catsLawsTest,
-      catsLawsTestkitTest
+      catsLawsTestkitTest,
+      fs2Core
     )
   )
 

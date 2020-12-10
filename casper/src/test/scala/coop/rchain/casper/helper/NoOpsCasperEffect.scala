@@ -50,18 +50,18 @@ class NoOpsCasperEffect[F[_]: Sync: BlockStore: BlockDagStorage] private (
       _ <- Sync[F].delay(store.update(b.get.blockHash, b.get))
     } yield BlockStatus.valid.asRight
 
-  override def getSnapshot: F[CasperSnapshot[F]] = ???
-  override def validate(
-      b: BlockMessage,
-      dag: BlockDagRepresentation[F]
-  ): F[Either[BlockError, ValidBlock]]                                             = ???
+  override def getSnapshot: F[CasperSnapshot[F]]                                   = ???
   override def handleValidBlock(block: BlockMessage): F[BlockDagRepresentation[F]] = ???
   override def handleInvalidBlock(
       block: BlockMessage,
       status: InvalidBlock,
       dag: BlockDagRepresentation[F]
-  ): F[BlockDagRepresentation[F]]                       = ???
-  override def getReadyToBeAdded: F[List[BlockMessage]] = ???
+  ): F[BlockDagRepresentation[F]] = ???
+
+  override def validate(b: BlockMessage, s: CasperSnapshot[F]): F[Either[BlockError, ValidBlock]] =
+    ???
+
+  override def getDependencyFreeFromBuffer: F[List[BlockMessage]] = ???
 }
 
 object NoOpsCasperEffect {
