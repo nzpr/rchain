@@ -32,6 +32,6 @@ object SystemDeployPlatformFailure {
       )
   final case class GasRefundFailure(errorMsg: String)
       extends SystemDeployPlatformFailure(s"Unable to refund remaining gas ($errorMsg)")
-  case object ConsumeFailed
-      extends SystemDeployPlatformFailure("Unable to consume results of system deploy")
+  case class ConsumeFailed(systemDeploy: SystemDeploy)
+      extends SystemDeployPlatformFailure(s"Unable to consume results of system deploy: ${systemDeploy.source}")
 }

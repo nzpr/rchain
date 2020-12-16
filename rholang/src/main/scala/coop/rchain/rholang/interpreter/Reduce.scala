@@ -102,16 +102,10 @@ class DebruijnInterpreter[M[_]](
 
   private[this] def continue(res: Application, repeatOp: M[Unit], persistent: Boolean) =
     res match {
-      case Some((continuation, dataList, _)) if persistent =>
-        dispatchAndRun(continuation, dataList)(
-          repeatOp
-        )
-      case Some((continuation, dataList, peek)) if peek =>
-        dispatchAndRun(continuation, dataList)(
-          producePeeks(dataList): _*
-        )
       case Some((continuation, dataList, _)) =>
-        dispatch(continuation, dataList)
+        if (persistent)
+          dispatchAndRun(continuation, dataList)(repeatOp)
+        else dispatch(continuation, dataList)
       case None => syncM.unit
     }
 
@@ -129,18 +123,6 @@ class DebruijnInterpreter[M[_]](
     continuation,
     dataList.map(_._2)
   )
-
-  private[this] def producePeeks(
-      dataList: Seq[(Par, ListParWithRandom, ListParWithRandom, Boolean)]
-  ) =
-    dataList
-      .withFilter {
-        case (_, _, _, persist) => !persist
-      }
-      .map {
-        case (chan, _, removedData, _) =>
-          produce(chan, removedData, false)
-      }
 
   /**
     * The evaluation of a Par is at the mercy of `Parallel` instance passed to `DebruijnInterpreter`. Therefore, if a

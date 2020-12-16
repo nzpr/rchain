@@ -190,7 +190,33 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       continuation: K,
       persist: Boolean,
       peeks: SortedSet[Int] = SortedSet.empty
-  ): F[MaybeActionResult] =
+  ): F[MaybeActionResult] = {
+
+    def restoreConsume(consumeResult: (ContResult[C, P, K], Seq[Result[C, A]])): F[Unit] = {
+
+      def toProduce(v: (ContResult[C, P, K], Seq[Result[C, A]])) = {
+        val (consumedCont, consumedData) = v
+        val taggedCont                   = consumedCont.continuation
+        (taggedCont, consumedData)
+      }
+
+      val results = toProduce(consumeResult)._2
+      results.traverse_ { r =>
+        {
+          val (chan, _, removedData, _) = (r.channel, r.matchedDatum, r.removedDatum, r.persistent)
+          for {
+            p <- Produce.createF(chan, removedData, false)
+            _ <- lockedProduce(
+                  chan,
+                  removedData,
+                  false,
+                  p
+                )
+          } yield ()
+        }
+      }
+    }
+
     contextShift.evalOn(scheduler) {
       if (channels.isEmpty) {
         val msg = "channels can't be empty"
@@ -201,18 +227,26 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       } else
         (for {
           consumeRef <- Consume.createF(channels, patterns, continuation, persist)
-          result <- consumeLockF(channels) {
-                     lockedConsume(
-                       channels,
-                       patterns,
-                       continuation,
-                       persist,
-                       peeks,
-                       consumeRef
-                     )
-                   }
+          result <- consumeLockF(channels)(
+                     for {
+                       consumeResult <- lockedConsume(
+                                         channels,
+                                         patterns,
+                                         continuation,
+                                         persist,
+                                         peeks,
+                                         consumeRef
+                                       )
+                       _ <- Applicative[F]
+                             .whenA(peeks.nonEmpty && !persist && consumeResult.isDefined)(
+                               Log[F].debug(s"peeked produce, results: ${consumeResult.get._2.size}") >>
+                                 restoreConsume(consumeResult.get)
+                             )
+                     } yield consumeResult
+                   )
         } yield result).timer(consumeTimeCommLabel)(Metrics[F], MetricsSource)
     }
+  }
 
   protected[this] def lockedConsume(
       channels: Seq[C],
@@ -227,15 +261,48 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       channel: C,
       data: A,
       persist: Boolean
-  ): F[MaybeActionResult] =
+  ): F[MaybeActionResult] = {
+    def restoreConsume(consumeResult: (ContResult[C, P, K], Seq[Result[C, A]])): F[Unit] = {
+
+      def toProduce(v: (ContResult[C, P, K], Seq[Result[C, A]])) = {
+        val (consumedCont, consumedData) = v
+        val taggedCont                   = consumedCont.continuation
+        (taggedCont, consumedData)
+      }
+
+      val results = toProduce(consumeResult)._2
+      results.traverse_ { r =>
+        {
+          val (chan, _, removedData, _) = (r.channel, r.matchedDatum, r.removedDatum, r.persistent)
+          for {
+            p <- Produce.createF(chan, removedData, false)
+            _ <- lockedProduce(
+                  chan,
+                  removedData,
+                  false,
+                  p
+                )
+          } yield ()
+        }
+      }
+    }
+
     contextShift.evalOn(scheduler) {
       (for {
         produceRef <- Produce.createF(channel, data, persist)
-        result <- produceLockF(channel)(
-                   lockedProduce(channel, data, persist, produceRef)
-                 )
+        result <- produceLockF(channel)(for {
+                   produceResult <- lockedProduce(channel, data, persist, produceRef)
+                   producedIntoPeek = produceResult.map(_._1.peek)
+                   _ <- Applicative[F]
+                         .whenA(produceResult.isDefined && producedIntoPeek.get && !persist)(
+                           Log[F].debug(s"produced into peek, results: ${produceResult.get._2.size}") >>
+                             restoreConsume(produceResult.get)
+                         )
+
+                 } yield produceResult)
       } yield result).timer(produceTimeCommLabel)(Metrics[F], MetricsSource)
     }
+  }
 
   protected[this] def lockedProduce(
       channel: C,

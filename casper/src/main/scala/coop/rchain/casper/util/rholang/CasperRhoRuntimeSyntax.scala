@@ -373,7 +373,7 @@ final class RhoRuntimeOps[F[_]: Sync: Span: Log](
                                       }
                                     case Some((_, unexpectedResults)) =>
                                       UnexpectedResult(unexpectedResults.flatMap(_.pars)).raiseError
-                                    case None => ConsumeFailed.raiseError
+                                    case None => ConsumeFailed(systemDeploy).raiseError
                                   }
       postDeploySoftCheckpoint <- runtime.createSoftCheckpoint
       log                      = postDeploySoftCheckpoint.log
@@ -503,7 +503,7 @@ final class ReplayRhoRuntimeOps[F[_]: Sync: Span: Log](
           systemDeploy.extractResult(par)
         case Some((_, unexpectedResults)) =>
           UnexpectedResult(unexpectedResults.flatMap(_.pars)).asLeft
-        case None => ConsumeFailed.asLeft
+        case None => ConsumeFailed(systemDeploy).asLeft
       }
       .leftSemiflatMap {
         case platformFailure: SystemDeployPlatformFailure =>
