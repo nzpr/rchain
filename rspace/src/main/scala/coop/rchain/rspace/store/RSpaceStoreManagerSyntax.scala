@@ -22,18 +22,20 @@ final class RSpaceStoreManagerOps[F[_]](
     */
   def rSpaceStores(implicit m: Monad[F]): F[RSpaceStore[F]] =
     for {
-      history <- kvm.store("rspace-history")
-      roots   <- kvm.store("rspace-roots")
-      cold    <- kvm.store("rspace-cold")
-    } yield RSpaceStore[F](history, roots, cold)
+      history  <- kvm.store("rspace-history")
+      roots    <- kvm.store("rspace-roots")
+      cold     <- kvm.store("rspace-cold")
+      channels <- kvm.store("channels")
+    } yield RSpaceStore[F](history, roots, cold, channels)
 
   /**
     * Create stores used in Rholang evaluator
     */
   def evalStores(implicit m: Monad[F]): F[RSpaceStore[F]] =
     for {
-      history <- kvm.store("eval-history")
-      roots   <- kvm.store("eval-roots")
-      cold    <- kvm.store("eval-cold")
-    } yield RSpaceStore[F](history, roots, cold)
+      history  <- kvm.store("eval-history")
+      roots    <- kvm.store("eval-roots")
+      cold     <- kvm.store("eval-cold")
+      channels <- kvm.store("channels")
+    } yield RSpaceStore[F](history, roots, cold, channels)
 }

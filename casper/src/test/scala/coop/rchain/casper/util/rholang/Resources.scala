@@ -9,14 +9,19 @@ import coop.rchain.casper.storage.RNodeKeyValueStoreManager.rnodeDbMapping
 import coop.rchain.metrics
 import coop.rchain.metrics.{Metrics, NoopSpan, Span}
 import coop.rchain.rholang.Resources.{mkRuntimeAt, mkTempDir}
-import coop.rchain.rholang.interpreter.Runtime.RhoHistoryRepository
+import coop.rchain.rholang.interpreter.RhoRuntime.RhoHistoryRepository
 import coop.rchain.shared.Log
 import coop.rchain.store.LmdbDirStoreManager.mb
 import coop.rchain.store.{KeyValueStoreManager, LmdbDirStoreManager}
+import coop.rchain.casper.helper.BlockDagStorageFixture
 import monix.execution.Scheduler
-
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.{Files, Path}
+
+import coop.rchain.blockstorage.BlockStore
+import coop.rchain.blockstorage.dag.{BlockDagKeyValueStorage, BlockDagStorage}
+import coop.rchain.blockstorage.finality.{LastFinalizedFileStorage, LastFinalizedStorage}
+import coop.rchain.casper.storage.RNodeKeyValueStoreManager
 
 object Resources {
 
@@ -51,7 +56,7 @@ object Resources {
 
     for {
       runtime        <- mkRuntimeAt[F](kvm)
-      runtimeManager <- RuntimeManager.fromRuntime(runtime._1)
+      runtimeManager <- RuntimeManager.fromRuntimes(runtime._1, runtime._2, runtime._3)
     } yield runtimeManager
   }
 
@@ -65,11 +70,26 @@ object Resources {
     implicit val noopSpan: Span[F] = NoopSpan[F]()
 
     for {
-      runtimes           <- mkRuntimeAt[F](kvm)
-      (runtime, history) = runtimes
-      runtimeManager     <- RuntimeManager.fromRuntime(runtime)
+      runtimes                          <- mkRuntimeAt[F](kvm)
+      (runtime, replayRuntime, history) = runtimes
+      runtimeManager                    <- RuntimeManager.fromRuntimes(runtime, replayRuntime, history)
     } yield (runtimeManager, history)
   }
+
+  def mkLastFinalizedStorage[F[_]: Concurrent: Metrics: Sync: Log](
+      path: Path
+  ): Resource[F, LastFinalizedStorage[F]] =
+    Resource.liftF(
+      LastFinalizedFileStorage.make[F](path)
+    )
+
+  def mkBlockDagStorageAt[F[_]: Concurrent: Sync: Log: Metrics](
+      path: Path
+  ): Resource[F, BlockDagStorage[F]] =
+    Resource.liftF(for {
+      storeManager    <- RNodeKeyValueStoreManager[F](path)
+      blockDagStorage <- BlockDagKeyValueStorage.create[F](storeManager)
+    } yield blockDagStorage)
 
   def mkCasperBufferStorage[F[_]: Concurrent: Log: Metrics](
       kvm: KeyValueStoreManager[F]

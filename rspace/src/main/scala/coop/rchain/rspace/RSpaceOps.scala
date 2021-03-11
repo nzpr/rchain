@@ -104,6 +104,9 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
   def getWaitingContinuations(channels: Seq[C]): F[Seq[WaitingContinuation[P, K]]] =
     store.getContinuations(channels)
 
+  def getJoins(channel: C): F[Seq[Seq[C]]] =
+    store.getJoins(channel)
+
   protected[this] def consumeLockF(
       channels: Seq[C]
   )(
@@ -171,7 +174,7 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
           store.removeDatum(candidateChannel, dataIndex).unlessA(persistData)
       }
 
-  protected[this] def restoreInstalls(): F[Unit] =
+  def restoreInstalls(): F[Unit] =
     /*spanF.trace(restoreInstallsSpanLabel)*/
     installs.get.toList
       .traverse {
@@ -324,18 +327,20 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       _           = eventLog.put(Seq.empty)
       _           = produceCounter.take()
       _           = produceCounter.put(Map.empty.withDefaultValue(0))
-      _           <- createNewHotStore(nextHistory)(serializeK.toSizeHeadCodec)
-      _           <- restoreInstalls()
+      _ <- createNewHotStore(nextHistory.getHistoryReader(root))(
+            serializeK.toSizeHeadCodec
+          )
+      _ <- restoreInstalls()
     } yield ()
   }
 
   override def clear(): F[Unit] = reset(History.emptyRootHash)
 
   protected def createNewHotStore(
-      historyReader: HistoryReader[F, C, P, A, K]
+      historyReader: HashHistoryReader[F, C, P, A, K]
   )(implicit ck: Codec[K]): F[Unit] =
     for {
-      nextHotStore <- HotStore.empty(historyReader)
+      nextHotStore <- HotStore.empty(historyReader.toRho)
       _            = storeAtom.set(nextHotStore)
     } yield ()
 
@@ -354,9 +359,12 @@ abstract class RSpaceOps[F[_]: Concurrent: Metrics, C, P, A, K](
       implicit val ck: Codec[K] = serializeK.toSizeHeadCodec
       val history               = historyRepositoryAtom.get()
       for {
-        hotStore <- HotStore.from(checkpoint.cacheSnapshot.cache, history)
-        _        = storeAtom.set(hotStore)
-        _        = eventLog.take()
+        hotStore <- HotStore.from(
+                     checkpoint.cacheSnapshot.cache,
+                     history.getHistoryReader(history.root).toRho
+                   )
+        _ = storeAtom.set(hotStore)
+        _ = eventLog.take()
 
         _ = eventLog.put(checkpoint.log)
         _ = produceCounter.take()

@@ -4,10 +4,12 @@ import cats.effect.Sync
 import java.nio.file.{Files, Path}
 
 import coop.rchain.rspace.{
+  Blake2b256Hash,
   DeleteContinuations,
   DeleteData,
   DeleteJoins,
   HotStoreAction,
+  InMemRSpaceCache,
   InsertContinuations,
   InsertData,
   InsertJoins
@@ -22,12 +24,13 @@ import org.scalatest.prop.GeneratorDrivenPropertyChecks
 import scodec.Codec
 import monix.execution.Scheduler.Implicits.global
 import cats.implicits._
+import coop.rchain.metrics.{NoopSpan, Span}
+import coop.rchain.rspace.channelStore.instances.ChannelStoreImpl
 import coop.rchain.rspace.internal.{Datum, WaitingContinuation}
 import coop.rchain.rspace.state.instances.{RSpaceExporterStore, RSpaceImporterStore}
-import org.lmdbjava.EnvFlags
 import coop.rchain.shared.PathOps._
-import coop.rchain.shared.Serialize
-import coop.rchain.store.{InMemoryKeyValueStore, InMemoryStoreManager, KeyValueStoreManager}
+import coop.rchain.store.InMemoryStoreManager
+import coop.rchain.shared.{Log, Serialize}
 
 import scala.concurrent.duration._
 
@@ -39,7 +42,9 @@ class LMDBHistoryRepositoryGenerativeSpec
 
   val kvm = InMemoryStoreManager[Task]
 
-  override def repo: Task[HistoryRepository[Task, String, Pattern, String, StringsCaptor]] =
+  override def repo: Task[HistoryRepository[Task, String, Pattern, String, StringsCaptor]] = {
+    implicit val log: Log[Task]   = new Log.NOPLog[Task]
+    implicit val span: Span[Task] = new NoopSpan[Task]
     for {
       historyLmdbKVStore <- kvm.store("history")
       historyStore       = HistoryStoreInstances.historyStore(historyLmdbKVStore)
@@ -48,18 +53,25 @@ class LMDBHistoryRepositoryGenerativeSpec
       rootsLmdbKVStore   <- kvm.store("roots")
       rootsStore         = RootsStoreInstances.rootsStore(rootsLmdbKVStore)
       rootRepository     = new RootRepository[Task](rootsStore)
+      channelKVStore     <- kvm.store("channels")
+      channelStore       = ChannelStoreImpl(channelKVStore, stringSerialize, codecString)
       emptyHistory       = HistoryInstances.merging(History.emptyRootHash, historyStore)
       exporter           = RSpaceExporterStore[Task](historyLmdbKVStore, coldLmdbKVStore, rootsLmdbKVStore)
       importer           = RSpaceImporterStore[Task](historyLmdbKVStore, coldLmdbKVStore, rootsLmdbKVStore)
+      rSpaceCache        <- InMemRSpaceCache[Task, String, Pattern, String, StringsCaptor]
       repository: HistoryRepository[Task, String, Pattern, String, StringsCaptor] = HistoryRepositoryImpl
         .apply[Task, String, Pattern, String, StringsCaptor](
           emptyHistory,
           rootRepository,
           coldStore,
           exporter,
-          importer
+          importer,
+          channelStore,
+          stringSerialize,
+          rSpaceCache
         )
     } yield repository
+  }
 
   protected override def afterAll(): Unit =
     dbDir.recursivelyDelete()
@@ -72,15 +84,28 @@ class InmemHistoryRepositoryGenerativeSpec
   override def repo: Task[HistoryRepository[Task, String, Pattern, String, StringsCaptor]] = {
     val emptyHistory =
       HistoryInstances.merging[Task](History.emptyRootHash, inMemHistoryStore)
-    val repository: HistoryRepository[Task, String, Pattern, String, StringsCaptor] =
-      HistoryRepositoryImpl.apply[Task, String, Pattern, String, StringsCaptor](
+    implicit val log: Log[Task]   = new Log.NOPLog[Task]
+    implicit val span: Span[Task] = new NoopSpan[Task]
+    val kvm                       = InMemoryStoreManager[Task]
+    for {
+      channelKVStore <- kvm.store("channels")
+      channelStore = ChannelStoreImpl[Task, String](
+        channelKVStore,
+        stringSerialize,
+        codecString
+      )
+      rSpaceCache <- InMemRSpaceCache[Task, String, Pattern, String, StringsCaptor]
+      r = HistoryRepositoryImpl.apply[Task, String, Pattern, String, StringsCaptor](
         emptyHistory,
         rootRepository,
         inMemColdStore,
         emptyExporter,
-        emptyImporter
+        emptyImporter,
+        channelStore,
+        stringSerialize,
+        rSpaceCache
       )
-    repository.pure[Task]
+    } yield r
   }
 
 }
@@ -110,7 +135,7 @@ abstract class HistoryRepositoryGenerativeDefinition
           .foldLeftM(repository) { (repo, action) =>
             for {
               next <- repo.checkpoint(action :: Nil)
-              _    <- checkActionResult(action, next)
+              _    <- checkActionResult(action, next.getHistoryReader(next.root).toRho)
             } yield next
           }
       }
@@ -133,7 +158,7 @@ abstract class HistoryRepositoryGenerativeDefinition
 
   def checkActionResult(
       action: HotStoreAction,
-      repo: HistoryRepository[Task, String, Pattern, String, StringsCaptor]
+      repo: RhoHistoryReader[Task, String, Pattern, String, StringsCaptor]
   ): Task[Unit] =
     action match {
       case InsertData(channel: String, data) =>
