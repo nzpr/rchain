@@ -13,6 +13,7 @@ import coop.rchain.rspace.state.{RSpaceExporter, RSpaceImporter}
 import coop.rchain.rspace.{Blake2b256Hash, HotStoreAction, HotStoreTrieAction}
 import coop.rchain.shared.{Log, Serialize}
 import coop.rchain.store.{KeyValueStore, LazyAdHocKeyValueCache}
+import fs2.Stream
 import scodec.Codec
 
 /**
@@ -34,7 +35,7 @@ final case class HistoryCache[F[_], C, P, A, K](
 trait HistoryRepository[F[_], C, P, A, K] extends ChannelStore[F, C] {
   def checkpoint(actions: List[HotStoreAction]): F[HistoryRepository[F, C, P, A, K]]
 
-  def doCheckpoint(actions: Seq[HotStoreTrieAction]): F[HistoryRepository[F, C, P, A, K]]
+  def doCheckpoint(actions: Stream[F, HotStoreTrieAction]): F[HistoryRepository[F, C, P, A, K]]
 
   def reset(root: Blake2b256Hash): F[HistoryRepository[F, C, P, A, K]]
 

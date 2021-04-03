@@ -15,6 +15,7 @@ import coop.rchain.shared.syntax._
 import coop.rchain.shared.Language._
 import coop.rchain.shared.{Log, Serialize, Stopwatch}
 import coop.rchain.store.LazyKeyValueCache
+import fs2.Stream
 
 /**
   * State merger using diff of start and enf state to compute changes
@@ -42,7 +43,9 @@ final case class DiffStateMerger[F[_]: Concurrent: Log, C, P, A, K](
 
       // apply trie actions
       mergedState <- Stopwatch.time(Log[F].info(_))("process trieActions")(
-                      historyRepo.reset(mainState.root).flatMap(_.doCheckpoint(trieActions))
+                      historyRepo
+                        .reset(mainState.root)
+                        .flatMap(_.doCheckpoint(Stream.emits(trieActions)))
                     )
     } yield mergedState.history
 

@@ -16,7 +16,7 @@ import coop.rchain.rspace._
 import coop.rchain.rspace.merger.instances.DiffStateMerger
 import coop.rchain.shared.{Log, Serialize}
 import coop.rchain.shared.syntax._
-import coop.rchain.store.LazyAdHocKeyValueCache
+import coop.rchain.metrics.implicits._
 import scodec.Codec
 import fs2.Stream
 
@@ -161,54 +161,50 @@ final case class HistoryRepositoryImpl[F[_]: Concurrent: Parallel: Log: Span, C,
         TrieDeleteJoins(key)
     }
 
-  // this method is what chackpoint is supposed to do, but checkoint operates on actions on channels, and this
+  // this method is what chackpoint is supposed to do, but checkpoint operates on actions on channels, and this
   // address by hashes. TODO elaborate unified API
-  def doCheckpoint(trieActions: Seq[HotStoreTrieAction]): F[HistoryRepository[F, C, P, A, K]] = {
-    val storageActions = trieActions.par.map(calculateStorageActions)
-    val coldActions    = storageActions.map(_._1).collect { case (key, Some(data)) => (key, data) }
+  def doCheckpoint(
+      trieActions: Stream[F, HotStoreTrieAction]
+  ): F[HistoryRepository[F, C, P, A, K]] = {
+    val storageActions =
+      trieActions.parEvalMapProcBounded(a => Sync[F].delay(calculateStorageActions(a)))
+    val dataActions    = storageActions.collect { case ((key, Some(data)), _) => (key, data) }
     val historyActions = storageActions.map(_._2)
 
-    // save new root for state after checkpoint
-    val storeRoot = (root: Blake2b256Hash) => Stream.eval(rootsRepository.commit(root))
+    // persist data changes
+    val processDataActions =
+      Span[F].traceI("compute-cold-actions")(dataActions.compile.toList) >>= { r =>
+        Span[F].traceI("store-cold-data")(leafStore.putIfAbsent(r))
+      }
+    // persist history changes, commit resulting new history root
+    val processHistoryActions =
+      Span[F].traceI("compute-history-actions")(historyActions.compile.toList) >>= { r =>
+        Span[F].traceI("store-history-data")(
+          history
+            .process(r)
+            .flatTap(resultHistory => rootsRepository.commit(resultHistory.root))
+        )
+      }
 
-    // store cold data
-    val storeLeaves =
-      Stream.eval(leafStore.putIfAbsent(coldActions.toList).map(_.asLeft[History[F]]))
-    // store everything related to history (history data, new root and populate cache for new root)
-    val storeHistory = Stream
-      .eval(
-        history
-          .process(historyActions.toList)
-          .flatMap(
-            resultHistory =>
-              storeRoot(resultHistory.root).compile.drain.as(resultHistory.asRight[Unit])
-          )
-      )
+    val work = Stream.eval(processHistoryActions) concurrently Stream.eval(processDataActions)
 
-    for {
-      newHistory <- Stream
-                     .emits(List(storeLeaves, storeHistory))
-                     .parJoinProcBounded
-                     .collect { case Right(history) => history }
-                     .compile
-                     .lastOrError
-    } yield this.copy(
-      currentHistory = newHistory,
-      channelHashesStore = channelHashesStore
-    )
+    work.compile.lastOrError.map(newHistory => this.copy(currentHistory = newHistory))
   }
 
   override def checkpoint(actions: List[HotStoreAction]): F[HistoryRepository[F, C, P, A, K]] = {
-    val trieActions = actions.par.map(transform).toList
+    val trieActions       = Stream.emits(actions).parEvalMapProcBounded(a => Sync[F].delay(transform(a)))
+    val performCheckpoint = doCheckpoint(trieActions)
+
     // store channels mapping
-    val storeChannels = Stream
-      .emits(actions.map(a => Stream.eval(storeChannelHash(a).map(_.asLeft[History[F]]))))
-      .parJoinProcBounded
-    for {
-      r <- doCheckpoint(trieActions)
-      _ <- storeChannels.compile.drain
-      _ <- measure(actions)
-    } yield r
+    val storeChannels = Span[F].withMarks("populate-channels")(
+      Stream
+        .emits(actions.map(a => Stream.eval(storeChannelHash(a))))
+        .parJoinProcBounded
+        .compile
+        .drain
+    )
+
+    performCheckpoint <* storeChannels <* measure(actions)
   }
 
   override def reset(root: Blake2b256Hash): F[HistoryRepository[F, C, P, A, K]] =
