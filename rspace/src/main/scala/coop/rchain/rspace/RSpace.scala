@@ -53,42 +53,40 @@ class RSpace[F[_], C, P, A, K](
       peeks: SortedSet[Int],
       consumeRef: Consume
   ): F[MaybeActionResult] =
-    Span[F].traceI("locked-consume") {
-      for {
-        _ <- logF.debug(
-              s"consume: searching for data matching <patterns: $patterns> at <channels: $channels>"
-            )
-        _                    <- logConsume(consumeRef, channels, patterns, continuation, persist, peeks)
-        channelToIndexedData <- fetchChannelToIndexData(channels)
-        options <- extractDataCandidates(
-                    channels.zip(patterns),
-                    channelToIndexedData,
-                    Nil
-                  ).map(_.sequence)
-        wk = WaitingContinuation(patterns, continuation, persist, peeks, consumeRef)
-        result <- options.fold(storeWaitingContinuation(channels, wk))(
-                   dataCandidates =>
-                     for {
-                       _ <- logComm(
+    for {
+      _ <- logF.debug(
+            s"consume: searching for data matching <patterns: $patterns> at <channels: $channels>"
+          )
+      _                    <- logConsume(consumeRef, channels, patterns, continuation, persist, peeks)
+      channelToIndexedData <- fetchChannelToIndexData(channels)
+      options <- extractDataCandidates(
+                  channels.zip(patterns),
+                  channelToIndexedData,
+                  Nil
+                ).map(_.sequence)
+      wk = WaitingContinuation(patterns, continuation, persist, peeks, consumeRef)
+      result <- options.fold(storeWaitingContinuation(channels, wk))(
+                 dataCandidates =>
+                   for {
+                     _ <- logComm(
+                           dataCandidates,
+                           channels,
+                           wk,
+                           COMM(
                              dataCandidates,
-                             channels,
-                             wk,
-                             COMM(
-                               dataCandidates,
-                               consumeRef,
-                               peeks,
-                               produceCounters _
-                             ),
-                             consumeCommLabel
-                           )
-                       _ <- storePersistentData(dataCandidates, peeks)
-                       _ <- logF.debug(
-                             s"consume: data found for <patterns: $patterns> at <channels: $channels>"
-                           )
-                     } yield wrapResult(channels, wk, consumeRef, dataCandidates)
-                 )
-      } yield result
-    }
+                             consumeRef,
+                             peeks,
+                             produceCounters _
+                           ),
+                           consumeCommLabel
+                         )
+                     _ <- storePersistentData(dataCandidates, peeks)
+                     _ <- logF.debug(
+                           s"consume: data found for <patterns: $patterns> at <channels: $channels>"
+                         )
+                   } yield wrapResult(channels, wk, consumeRef, dataCandidates)
+               )
+    } yield result
 
   /*
    * Here, we create a cache of the data at each channel as `channelToIndexedData`
@@ -111,22 +109,20 @@ class RSpace[F[_], C, P, A, K](
       persist: Boolean,
       produceRef: Produce
   ): F[MaybeActionResult] =
-    Span[F].traceI("locked-produce") {
-      for {
-        //TODO fix double join fetch
-        groupedChannels <- store.getJoins(channel)
-        _ <- logF.debug(
-              s"produce: searching for matching continuations at <groupedChannels: $groupedChannels>"
-            )
-        _ <- logProduce(produceRef, channel, data, persist)
-        extracted <- extractProduceCandidate(
-                      groupedChannels,
-                      channel,
-                      Datum(data, persist, produceRef)
-                    )
-        r <- extracted.fold(storeData(channel, data, persist, produceRef))(processMatchFound)
-      } yield r
-    }
+    for {
+      //TODO fix double join fetch
+      groupedChannels <- store.getJoins(channel)
+      _ <- logF.debug(
+            s"produce: searching for matching continuations at <groupedChannels: $groupedChannels>"
+          )
+      _ <- logProduce(produceRef, channel, data, persist)
+      extracted <- extractProduceCandidate(
+                    groupedChannels,
+                    channel,
+                    Datum(data, persist, produceRef)
+                  )
+      r <- extracted.fold(storeData(channel, data, persist, produceRef))(processMatchFound)
+    } yield r
 
   /*
    * Find produce candidate

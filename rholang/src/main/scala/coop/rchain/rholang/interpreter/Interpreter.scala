@@ -47,15 +47,13 @@ class InterpreterImpl[F[_]: Sync: Span](implicit C: _cost[F]) extends Interprete
 
     val parsingCost = accounting.parsingCost(term)
     val evaluationResult = for {
-      _ <- Span[F].traceI("set-initial-cost") { C.set(initialPhlo) }
-      _ <- Span[F].traceI("charge-parsing-cost") { charge[F](parsingCost) }
-      parsed <- Span[F].traceI("build-normalized-term") {
-                 ParBuilder[F]
-                   .buildNormalizedTerm(term, normalizerEnv)
-                   .handleErrorWith {
-                     case err: InterpreterError => ParserError(err).raiseError[F, Par]
-                   }
-               }
+      _ <- C.set(initialPhlo)
+      _ <- charge[F](parsingCost)
+      parsed <- ParBuilder[F]
+                 .buildNormalizedTerm(term, normalizerEnv)
+                 .handleErrorWith {
+                   case err: InterpreterError => ParserError(err).raiseError[F, Par]
+                 }
       _         <- Span[F].traceI("reduce-term") { reducer.inj(parsed) }
       phlosLeft <- C.get
     } yield EvaluateResult(initialPhlo - phlosLeft, Vector())
