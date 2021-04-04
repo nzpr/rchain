@@ -186,6 +186,7 @@ final case class HistoryRepositoryImpl[F[_]: Concurrent: Parallel: Log: Span, C,
         )
       }
 
+    // TODO this way to run streams concurrently does not work, second stream will be terminated once first end. We need better way
     val work = Stream.eval(processHistoryActions) concurrently Stream.eval(processDataActions)
 
     work.compile.lastOrError.map(newHistory => this.copy(currentHistory = newHistory))
