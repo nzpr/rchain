@@ -279,8 +279,6 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
     } yield CasperSnapshot(
       dag,
       lfb,
-      lca,
-      tips,
       parents,
       justifications,
       invalidBlocks,
