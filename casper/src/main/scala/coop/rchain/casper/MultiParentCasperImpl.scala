@@ -205,7 +205,7 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
   override def getSnapshot(targetMessageOpt: Option[BlockMessage]): F[CasperSnapshot[F]] = {
     import cats.instances.list._
 
-    def getOnChainState(
+    def computeOnChainState(
         b: BlockMessage
     )(implicit runtimeManager: RuntimeManager[F]): F[OnChainCasperState] =
       for {
@@ -215,40 +215,56 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
         shardConfig = casperShardConf
       } yield OnChainCasperState(shardConfig, bm.map(v => v.validator -> v.stake).toMap, av)
 
+    def computeParents(dag: BlockDagRepresentation[F]): F[List[BlockMessage]] =
+      for {
+        r         <- Estimator[F].tips(dag, approvedBlock)
+        (_, tips) = (r.lca, r.tips)
+
+        /**
+          * Before block merge, `EstimatorHelper.chooseNonConflicting` were used to filter parents, as we could not
+          * have conflicting parents. With introducing block merge, all parents that share the same bonds map
+          * should be parents. Parents that have different bond maps are only one that cannot be merged in any way.
+          */
+        // For now main parent bonds map taken as a reference, but might be we want to pick a subset with equal
+        // bond maps that has biggest cumulative stake.
+        blocks  <- tips.toList.traverse(BlockStore[F].getUnsafe)
+        parents = blocks.filter(b => b.body.state.bonds == blocks.head.body.state.bonds)
+      } yield parents
+
+    /**
+      * We ensure that only the justifications given in the block are those
+      * which are bonded validators in the chosen parent. This is safe because
+      * any latest message not from a bonded validator will not change the
+      * final fork-choice.
+      */
+    def computeJustifications(
+        dag: BlockDagRepresentation[F],
+        onChainState: OnChainCasperState
+    ): F[Set[Justification]] =
+      for {
+        lms <- dag.latestMessages
+        r = lms.toList
+          .map {
+            case (validator, blockMetadata) => Justification(validator, blockMetadata.blockHash)
+          }
+          .filter(j => onChainState.bondsMap.keySet.contains(j.validator))
+      } yield r.toSet
+
     for {
-      dag         <- BlockDagStorage[F].getRepresentation
-      r           <- Estimator[F].tips(dag, approvedBlock)
-      (lca, tips) = (r.lca, r.tips)
+      dag <- BlockDagStorage[F].getRepresentation
 
-      /**
-        * Before block merge, `EstimatorHelper.chooseNonConflicting` were used to filter parents, as we could not
-        * have conflicting parents. With introducing block merge, all parents that share the same bonds map
-        * should be parents. Parents that have different bond maps are only one that cannot be merged in any way.
-        */
-      parents <- for {
-                  // For now main parent bonds map taken as a reference, but might be we want to pick a subset with equal
-                  // bond maps that has biggest cumulative stake.
-                  blocks  <- tips.toList.traverse(BlockStore[F].getUnsafe)
-                  parents = blocks.filter(b => b.body.state.bonds == blocks.head.body.state.bonds)
-                } yield parents
-      onChainState <- getOnChainState(parents.head)
+      // parents do not include invalid latest messages and share the same bonds map
+      parents <- targetMessageOpt
+                  .map(_.header.parentsHashList.traverse(BlockStore[F].getUnsafe))
+                  .getOrElse(computeParents(dag))
 
-      /**
-        * We ensure that only the justifications given in the block are those
-        * which are bonded validators in the chosen parent. This is safe because
-        * any latest message not from a bonded validator will not change the
-        * final fork-choice.
-        */
-      justifications <- {
-        for {
-          lms <- dag.latestMessages
-          r = lms.toList
-            .map {
-              case (validator, blockMetadata) => Justification(validator, blockMetadata.blockHash)
-            }
-            .filter(j => onChainState.bondsMap.keySet.contains(j.validator))
-        } yield r.toSet
-      }
+      onChainState <- computeOnChainState(parents.head)
+
+      // justifications might include invalid latest messages and should be bonded in parents
+      justifications <- targetMessageOpt
+                         .map(_.justifications.toSet.pure[F])
+                         .getOrElse(computeJustifications(dag, onChainState))
+
       parentMetas <- parents.traverse(b => dag.lookupUnsafe(b.blockHash))
       maxBlockNum = ProtoUtil.maxBlockNumberMetadata(parentMetas)
       maxSeqNums  <- dag.latestMessages.map(m => m.map { case (k, v) => k -> v.seqNum })
