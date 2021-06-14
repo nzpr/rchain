@@ -271,24 +271,22 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
       deploysInScope <- {
         val currentBlockNumber  = maxBlockNum + 1
         val earliestBlockNumber = currentBlockNumber - onChainState.shardConf.deployLifespan
-        for {
-          result <- DagOps
-                     .bfTraverseF[F, BlockMetadata](parentMetas)(
-                       b =>
-                         ProtoUtil
-                           .getParentMetadatasAboveBlockNumber(
-                             b,
-                             earliestBlockNumber,
-                             dag
-                           )
-                     )
-                     .foldLeftF(Set.empty[Signed[DeployData]]) { (deploys, blockMetadata) =>
-                       for {
-                         block        <- BlockStore[F].getUnsafe(blockMetadata.blockHash)
-                         blockDeploys = ProtoUtil.deploys(block).map(_.deploy)
-                       } yield deploys ++ blockDeploys
-                     }
-        } yield result
+        DagOps
+          .bfTraverseF[F, BlockMetadata](parentMetas)(
+            b =>
+              ProtoUtil
+                .getParentMetadatasAboveBlockNumber(
+                  b,
+                  earliestBlockNumber,
+                  dag
+                )
+          )
+          .foldLeftF(Set.empty[Signed[DeployData]]) { (deploys, blockMetadata) =>
+            for {
+              block        <- BlockStore[F].getUnsafe(blockMetadata.blockHash)
+              blockDeploys = ProtoUtil.deploys(block).map(_.deploy)
+            } yield deploys ++ blockDeploys
+          }
       }
       invalidBlocks <- dag.invalidBlocksMap
       lfb           <- LastFinalizedStorage[F].getOrElse(approvedBlock.blockHash)
