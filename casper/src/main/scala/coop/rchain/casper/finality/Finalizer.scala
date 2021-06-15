@@ -39,6 +39,8 @@ import fs2.Stream
   */
 object Finalizer {
 
+  val MaxSearchDepth = 100L
+
   private type WeightMap = Map[Validator, Long]
 
   /** Message that is agreed on + weight of this agreement. */

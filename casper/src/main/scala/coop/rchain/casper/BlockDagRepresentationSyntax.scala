@@ -20,7 +20,7 @@ final class BlockDagRepresentationOps[F[_]](private val dag: BlockDagRepresentat
   def findLastFinalizedBlock(
       latestMessagesView: List[(Validator, BlockMetadata)],
       faultToleranceThreshold: Float,
-      searchDepth: Long = 100
+      searchDepth: Long = Finalizer.MaxSearchDepth
   )(implicit syncF: Sync[F]): F[Option[BlockHash]] =
     Finalizer.findLastFinalizedBlock(dag, latestMessagesView, faultToleranceThreshold, searchDepth)
 }

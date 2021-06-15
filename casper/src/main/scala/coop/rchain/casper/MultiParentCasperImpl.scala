@@ -306,8 +306,34 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
           }
       }
       invalidBlocks <- dag.invalidBlocksMap
-      lfb           <- LastFinalizedStorage[F].getOrElse(approvedBlock.blockHash)
 
+      lfb <- dag
+              .findLastFinalizedBlock(
+                latestMessagesView = latestMessagesViewMetas,
+                faultToleranceThreshold = casperShardConf.faultToleranceThreshold
+              )
+              .flatMap { lfbOpt =>
+                // if approved block is in search range - return it.
+                // This is required because genesis has fault tolerance less then max value so wont be finalized for
+                // all thresholds.
+                // Also in future approved block restored from LFS might be finalized with fault tolerance less then current
+                // fault tolerance from shard config
+
+                val minBlockNum = parentMetas.map(_.blockNum).min
+                val approvedBlockIsInRange = dag
+                  .lookupUnsafe(approvedBlock.blockHash)
+                  .map(_.blockNum)
+                  .map(_ > minBlockNum - Finalizer.MaxSearchDepth)
+
+                val notFoundF = approvedBlockIsInRange.ifM(
+                  approvedBlock.blockHash.pure[F], {
+                    val lfbNotFoundErrMsg = s"No last finalized block found when creating casper snapshot for " +
+                      s"${targetMessageOpt.map(PrettyPrinter.buildString(_)).getOrElse("the most recent view")}."
+                    new Exception(lfbNotFoundErrMsg).raiseError[F, BlockHash]
+                  }
+                )
+                lfbOpt.map(_.pure[F]).getOrElse(notFoundF)
+              }
     } yield CasperSnapshot(
       dag.view(latestMessagesViewMetas.toMap),
       lfb,
