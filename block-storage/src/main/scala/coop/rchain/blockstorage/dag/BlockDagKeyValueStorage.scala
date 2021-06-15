@@ -54,19 +54,24 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       (blockHash.size == BlockHash.Length && dagSet.contains(blockHash)).pure[F]
 
     def children(blockHash: BlockHash): F[Option[Set[BlockHash]]] =
-      connectionsMap.get(blockHash).map(_.children).pure[F]
+      connectionsMap.get(blockHash).map(_.children intersect dagSet).pure[F]
 
     def latestMessageHash(validator: Validator): F[Option[BlockHash]] =
       latestMessagesMap.get(validator).pure[F]
 
     def latestMessageHashes: F[Map[Validator, BlockHash]] = latestMessagesMap.pure[F]
 
-    def invalidBlocks: F[Set[BlockMetadata]] = invalidBlocksSet.pure[F]
+    def invalidBlocks: F[Set[BlockMetadata]] =
+      invalidBlocksSet.filter(m => dagSet.contains(m.blockHash)).pure[F]
 
     // latestBlockNumber, topoSort and lookupByDeployId are only used in BlockAPI.
     // Do they need to be part of the DAG current state or they can be moved to DAG storage directly?
 
-    private def getMaxHeight = if (heightMap.nonEmpty) heightMap.last._1 + 1L else 0L
+    private def getMaxHeight: Long =
+      heightMap.keySet.toSeq.reverse
+        .find(height => (heightMap(height) intersect dagSet).nonEmpty)
+        .map(_ + 1)
+        .getOrElse(0L)
 
     def latestBlockNumber: F[Long] =
       getMaxHeight.pure[F]
@@ -96,7 +101,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
     }
 
     def lookupByDeployId(deployId: DeployId): F[Option[BlockHash]] =
-      deployIndex.get(deployId)
+      deployIndex.get(deployId).map(_.filter(dagSet.contains))
 
     override def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F] = {
       @tailrec
