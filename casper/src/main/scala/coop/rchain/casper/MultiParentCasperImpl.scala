@@ -265,9 +265,26 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
                          .map(_.justifications.toSet.pure[F])
                          .getOrElse(computeJustifications(dag, onChainState))
 
-      parentMetas <- parents.traverse(b => dag.lookupUnsafe(b.blockHash))
+      // parents and justifications are the only messages exposed by block for the world, so code below
+      // should use them as a view of block being created/validated. Latest messages are one per validator,
+      // but different validators can have the same latest message, hence this complex logic.
+      // Note: the only messages that target block might had been seen but here it cannot be known - is invalid blocks
+      // from senders that are not bonded in onChainState. But these messages cannot influence TODO(really?)
+      latestMessagesView = parents.map(p => (p.sender -> p.blockHash)) ++ justifications.toList
+        .filterNot(j => parents.map(_.sender).contains(j.validator))
+        .map { case Justification(s, h) => (s, h) }
+
+      v = latestMessagesView.traverse {
+        case (sender, message) => dag.lookupUnsafe(message).map((sender, _))
+      }
+      latestMessagesViewMetas <- v
+
+      parentMetas = latestMessagesViewMetas
+        .filter { case (_, meta) => parents.map(_.blockHash).contains(meta.blockHash) }
+        .map { case (_, meta) => meta }
+
       maxBlockNum = ProtoUtil.maxBlockNumberMetadata(parentMetas)
-      maxSeqNums  <- dag.latestMessages.map(m => m.map { case (k, v) => k -> v.seqNum })
+      maxSeqNums  = latestMessagesViewMetas.map { case (v, meta) => (v -> meta.seqNum) }.toMap
       deploysInScope <- {
         val currentBlockNumber  = maxBlockNum + 1
         val earliestBlockNumber = currentBlockNumber - onChainState.shardConf.deployLifespan
@@ -290,8 +307,9 @@ class MultiParentCasperImpl[F[_]: Sync: Concurrent: Log: Time: SafetyOracle: Blo
       }
       invalidBlocks <- dag.invalidBlocksMap
       lfb           <- LastFinalizedStorage[F].getOrElse(approvedBlock.blockHash)
+
     } yield CasperSnapshot(
-      dag,
+      dag.view(latestMessagesViewMetas.toMap),
       lfb,
       parents,
       justifications,

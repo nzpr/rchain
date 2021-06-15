@@ -75,7 +75,8 @@ final class InMemBlockDagStorage[F[_]: Concurrent: Sync: Log](
     def invalidBlocks: F[Set[BlockMetadata]] =
       invalidBlocksSet.pure[F]
 
-    override def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F] = ???
+    override def view(latestMessages: Map[Validator, BlockMetadata]): BlockDagRepresentation[F] =
+      ???
   }
 
   object InMemEquivocationsTracker extends EquivocationsTracker[F] {

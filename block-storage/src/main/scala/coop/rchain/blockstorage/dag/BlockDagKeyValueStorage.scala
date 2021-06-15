@@ -39,7 +39,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
 
   private case class KeyValueDagRepresentation(
       dagSet: Set[BlockHash],
-      latestMessagesMap: Map[Validator, BlockHash],
+      latestMessagesMap: Map[Validator, BlockMetadata],
       connectionsMap: Map[BlockHash, Connections],
       heightMap: SortedMap[Long, Set[BlockHash]],
       invalidBlocksSet: Set[BlockMetadata],
@@ -57,9 +57,10 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       connectionsMap.get(blockHash).map(_.children intersect dagSet).pure[F]
 
     def latestMessageHash(validator: Validator): F[Option[BlockHash]] =
-      latestMessagesMap.get(validator).pure[F]
+      latestMessagesMap.get(validator).map(_.blockHash).pure[F]
 
-    def latestMessageHashes: F[Map[Validator, BlockHash]] = latestMessagesMap.pure[F]
+    def latestMessageHashes: F[Map[Validator, BlockHash]] =
+      latestMessagesMap.map { case (v, meta) => (v, meta.blockHash) }.pure[F]
 
     def invalidBlocks: F[Set[BlockMetadata]] =
       invalidBlocksSet.filter(m => dagSet.contains(m.blockHash)).pure[F]
@@ -68,10 +69,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
     // Do they need to be part of the DAG current state or they can be moved to DAG storage directly?
 
     private def getMaxHeight: Long =
-      heightMap.keySet.toSeq.reverse
-        .find(height => (heightMap(height) intersect dagSet).nonEmpty)
-        .map(_ + 1)
-        .getOrElse(0L)
+      latestMessagesMap.values.map(_.blockNum).max
 
     def latestBlockNumber: F[Long] =
       getMaxHeight.pure[F]
@@ -103,7 +101,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
     def lookupByDeployId(deployId: DeployId): F[Option[BlockHash]] =
       deployIndex.get(deployId).map(_.filter(dagSet.contains))
 
-    override def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F] = {
+    override def view(latestMessages: Map[Validator, BlockMetadata]): BlockDagRepresentation[F] = {
       @tailrec
       def removeDescendants(hashes: Set[BlockHash], acc: Set[BlockHash]): Set[BlockHash] = {
         val children =
@@ -120,7 +118,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
             .diff(newAcc)
         if (newParents.isEmpty) newAcc else addWithAncestorsNew(newParents, newAcc)
       }
-      val lmSet = latestMessages.values.toSet
+      val lmSet = latestMessages.values.map(_.blockHash).toSet
       this.copy(
         dagSet = addWithAncestorsNew(lmSet, removeDescendants(lmSet, this.dagSet)),
         latestMessagesMap = latestMessages
@@ -150,7 +148,12 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
   private def representation: F[BlockDagRepresentation[F]] =
     for {
       // Take current DAG state / view of the DAG
-      latestMessages     <- latestMessagesIndex.toMap
+      latestMessages <- latestMessagesIndex.toMap
+      latestMetas <- latestMessages.toList
+                      .traverse {
+                        case (v, hash) => blockMetadataIndex.get(hash).map(mOpt => (v, mOpt.get))
+                      }
+                      .map(_.toMap)
       dagSet             <- blockMetadataIndex.dagSet
       connectionsMap     <- blockMetadataIndex.connectionsMapData
       heightMap          <- blockMetadataIndex.heightMap
@@ -158,7 +161,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       finalizedBlocksSet <- blockMetadataIndex.finalizedBlockSet
     } yield KeyValueDagRepresentation(
       dagSet,
-      latestMessages,
+      latestMetas,
       connectionsMap,
       heightMap,
       invalidBlocks,

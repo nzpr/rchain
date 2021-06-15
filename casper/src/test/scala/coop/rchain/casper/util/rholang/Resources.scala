@@ -146,7 +146,8 @@ object Resources {
 
       override def children(vertex: BlockHash): F[Option[Set[BlockHash]]] = ???
 
-      override def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F] = ???
+      override def view(latestMessages: Map[Validator, BlockMetadata]): BlockDagRepresentation[F] =
+        ???
     }
     CasperSnapshot[F](
       dummyRepresentation,
