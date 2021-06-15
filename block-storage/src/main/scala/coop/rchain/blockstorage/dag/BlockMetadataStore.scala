@@ -39,7 +39,7 @@ object BlockMetadataStore {
 
   private final case class DagState(
       dagSet: Set[BlockHash],
-      childMap: Map[BlockHash, Set[BlockHash]],
+      connectionsMap: Map[BlockHash, Connections],
       heightMap: SortedMap[Long, Set[BlockHash]],
       finalizedBlockSet: Set[BlockHash]
   )
@@ -87,8 +87,8 @@ object BlockMetadataStore {
 
     def contains(hash: BlockHash): F[Boolean] = dagState.get.map(_.dagSet.contains(hash))
 
-    def childMapData: F[Map[BlockHash, Set[BlockHash]]] =
-      dagState.get.map(_.childMap)
+    def connectionsMapData: F[Map[BlockHash, Connections]] =
+      dagState.get.map(_.connectionsMap)
 
     def heightMap: F[SortedMap[Long, Set[BlockHash]]] =
       dagState.get.map(_.heightMap)
@@ -96,16 +96,24 @@ object BlockMetadataStore {
     def finalizedBlockSet: F[Set[BlockHash]] = dagState.get.map(_.finalizedBlockSet)
   }
 
+  final case class Connections(
+      parents: Set[BlockHash] = Set.empty,
+      children: Set[BlockHash] = Set.empty
+  )
+
   private def addBlockToDagState(block: BlockInfo)(state: DagState): DagState = {
     // Update dag set / all blocks in the DAG
     val newDagSet = state.dagSet + block.hash
 
-    // Update children relation map
-    val blockChilds = block.parents.map((_, Set(block.hash))) + ((block.hash, Set()))
-    val newChildMap = blockChilds.foldLeft(state.childMap) {
-      case (acc, (key, newChildren)) =>
-        val currChildren = acc.getOrElse(key, Set.empty[BlockHash])
-        acc.updated(key, currChildren ++ newChildren)
+    // Update connectivity map
+    val blockRecorded =
+      state.connectionsMap.updated(block.hash, Connections(parents = block.parents))
+    val withParentsUpdated = block.parents.foldLeft(blockRecorded) {
+      case (acc, parent) =>
+        val parentCurConnectivity = acc.getOrElse(parent, Connections())
+        val parentNewConnectivity =
+          parentCurConnectivity.copy(children = parentCurConnectivity.children + block.hash)
+        acc.updated(parent, parentNewConnectivity)
     }
 
     // Update block height map
@@ -114,7 +122,7 @@ object BlockMetadataStore {
       state.heightMap.updated(block.blockNum, currSet + block.hash)
     } else state.heightMap
 
-    state.copy(dagSet = newDagSet, childMap = newChildMap, heightMap = newHeightMap)
+    state.copy(dagSet = newDagSet, connectionsMap = withParentsUpdated, heightMap = newHeightMap)
   }
 
   private def validateDagState(state: DagState): DagState = {
@@ -138,7 +146,12 @@ object BlockMetadataStore {
       lastFinalizedBlockHash: Option[BlockHash]
   ): DagState = {
     val emptyState =
-      DagState(dagSet = Set(), childMap = Map(), heightMap = SortedMap(), finalizedBlockSet = Set())
+      DagState(
+        dagSet = Set(),
+        connectionsMap = Map(),
+        heightMap = SortedMap(),
+        finalizedBlockSet = Set()
+      )
 
     // Add blocks to DAG state
     val dagState = blocksInfoMap.foldLeft(emptyState) {

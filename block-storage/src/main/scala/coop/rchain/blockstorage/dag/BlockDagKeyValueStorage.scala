@@ -6,7 +6,7 @@ import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage._
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
-import coop.rchain.blockstorage.dag.BlockMetadataStore.BlockMetadataStore
+import coop.rchain.blockstorage.dag.BlockMetadataStore.{BlockMetadataStore, Connections}
 import coop.rchain.blockstorage.dag.EquivocationTrackerStore.EquivocationTrackerStore
 import coop.rchain.blockstorage.dag.codecs._
 import coop.rchain.blockstorage.finality.{LastFinalizedKeyValueStorage, LastFinalizedStorage}
@@ -39,7 +39,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
   private case class KeyValueDagRepresentation(
       dagSet: Set[BlockHash],
       latestMessagesMap: Map[Validator, BlockHash],
-      childMap: Map[BlockHash, Set[BlockHash]],
+      connectionsMap: Map[BlockHash, Connections],
       heightMap: SortedMap[Long, Set[BlockHash]],
       invalidBlocksSet: Set[BlockMetadata],
       finalizedBlocksSet: Set[BlockHash]
@@ -53,7 +53,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       (blockHash.size == BlockHash.Length && dagSet.contains(blockHash)).pure[F]
 
     def children(blockHash: BlockHash): F[Option[Set[BlockHash]]] =
-      childMap.get(blockHash).pure[F]
+      connectionsMap.get(blockHash).map(_.children).pure[F]
 
     def latestMessageHash(validator: Validator): F[Option[BlockHash]] =
       latestMessagesMap.get(validator).pure[F]
@@ -122,14 +122,14 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       // Take current DAG state / view of the DAG
       latestMessages     <- latestMessagesIndex.toMap
       dagSet             <- blockMetadataIndex.dagSet
-      childMap           <- blockMetadataIndex.childMapData
+      connectionsMap     <- blockMetadataIndex.connectionsMapData
       heightMap          <- blockMetadataIndex.heightMap
       invalidBlocks      <- invalidBlocksIndex.toMap.map(_.toSeq.map(_._2).toSet)
       finalizedBlocksSet <- blockMetadataIndex.finalizedBlockSet
     } yield KeyValueDagRepresentation(
       dagSet,
       latestMessages,
-      childMap,
+      connectionsMap,
       heightMap,
       invalidBlocks,
       finalizedBlocksSet
