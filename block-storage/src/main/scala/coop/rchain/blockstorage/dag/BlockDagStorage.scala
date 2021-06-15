@@ -38,6 +38,7 @@ trait BlockDagRepresentation[F[_]] {
       maybeEndBlockNumber: Option[Long]
   ): F[Vector[Vector[BlockHash]]]
   def isFinalized(blockHash: BlockHash): F[Boolean]
+  def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F]
 }
 
 trait EquivocationsTracker[F[_]] {

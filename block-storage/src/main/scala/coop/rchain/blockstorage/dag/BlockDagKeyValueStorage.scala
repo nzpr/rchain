@@ -24,6 +24,7 @@ import coop.rchain.blockstorage.syntax._
 import coop.rchain.shared.{Log, LogSource}
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
 
+import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 
 final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
@@ -96,6 +97,30 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
 
     def lookupByDeployId(deployId: DeployId): F[Option[BlockHash]] =
       deployIndex.get(deployId)
+
+    override def view(latestMessages: Map[Validator, BlockHash]): BlockDagRepresentation[F] = {
+      @tailrec
+      def removeDescendants(hashes: Set[BlockHash], acc: Set[BlockHash]): Set[BlockHash] = {
+        val children =
+          hashes.flatMap(connectionsMap.getOrElse(_, Connections(Set.empty, Set.empty)).children)
+        val newAcc = acc -- children
+        if (children.isEmpty) acc else removeDescendants(children, newAcc)
+      }
+      @tailrec
+      def addWithAncestorsNew(hashes: Set[BlockHash], acc: Set[BlockHash]): Set[BlockHash] = {
+        val newAcc = acc ++ hashes
+        val newParents =
+          hashes
+            .flatMap(connectionsMap.getOrElse(_, Connections(Set.empty, Set.empty)).parents)
+            .diff(newAcc)
+        if (newParents.isEmpty) newAcc else addWithAncestorsNew(newParents, newAcc)
+      }
+      val lmSet = latestMessages.values.toSet
+      this.copy(
+        dagSet = addWithAncestorsNew(lmSet, removeDescendants(lmSet, this.dagSet)),
+        latestMessagesMap = latestMessages
+      )
+    }
   }
 
   private object KeyValueStoreEquivocationsTracker extends EquivocationsTracker[F] {
