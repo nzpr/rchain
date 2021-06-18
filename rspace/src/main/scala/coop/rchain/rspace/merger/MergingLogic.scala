@@ -33,7 +33,23 @@ object MergingLogic {
       val produceRaces =
         (a.producesConsumed intersect b.producesConsumed).toIterator.filterNot(_.persistent)
 
-      consumeRaces.flatMap(_.channelsHashes) ++ produceRaces.map(_.channelsHash)
+      val cr = consumeRaces.toList
+      val pr = produceRaces.toList
+      cr.foreach(c => println(s"Race for consume $c found"))
+      pr.foreach(
+        p =>
+          println(
+            s"Race for produce $p found, " +
+              s"existsInPreStateA: ${a.producesExistingInPreState.contains(p)}\n" +
+              s"existsInPreStateB: ${b.producesExistingInPreState.contains(p)}\n" +
+              s"has linear produce record in A: ${a.producesLinear.contains(p)}\n" +
+              s"has persistent produce record in A: ${a.producesPersistent.contains(p)}\n" +
+              s"has linear produce record in B: ${b.producesLinear.contains(p)}\n" +
+              s"has persistent produce record in B: ${b.producesPersistent.contains(p)}\n"
+          )
+      )
+
+      (cr.flatMap(_.channelsHashes) ++ pr.map(_.channelsHash)).toIterator
     }
 
     /**
@@ -65,12 +81,19 @@ object MergingLogic {
       (a.producesTouchingBaseJoins.toIterator ++ b.producesTouchingBaseJoins.toIterator)
         .map(_.channelsHash)
 
-    racesForSameIOEvent ++ potentialCOMMs ++ produceTouchBaseJoin
+    val r  = racesForSameIOEvent.toList
+    val p  = potentialCOMMs.toList
+    val tb = produceTouchBaseJoin.toList
+    if (r.nonEmpty) println(s"racesForSameIOEvent: ${r}")
+    if (p.nonEmpty) println(s"potentialCOMMs: ${p}")
+    if (tb.nonEmpty) println(s"produceTouchBaseJoin: ${tb.toList}")
+
+    (r ++ p ++ tb).toIterator //racesForSameIOEvent ++ potentialCOMMs ++ produceTouchBaseJoin
   }
 
   /** produce created inside event log */
   def producesCreated(e: EventLogIndex): Set[Produce] =
-    (e.producesLinear ++ e.producesPersistent) diff e.producesCopiedByPeek
+    (e.producesLinear ++ e.producesPersistent) diff e.producesExistingInPreState
 
   /** consume created inside event log */
   def consumesCreated(e: EventLogIndex): Set[Consume] =
@@ -78,7 +101,7 @@ object MergingLogic {
 
   /** produces that are created inside event log and not destroyed via COMM inside event log */
   def producesCreatedAndNotDestroyed(e: EventLogIndex): Set[Produce] =
-    ((e.producesLinear diff e.producesConsumed) ++ e.producesPersistent) diff e.producesCopiedByPeek
+    ((e.producesLinear diff e.producesConsumed) ++ e.producesPersistent) diff e.producesExistingInPreState
 
   /** consumes that are created inside event log and not destroyed via COMM inside event log */
   def consumesCreatedAndNotDestroyed(e: EventLogIndex): Set[Consume] =
@@ -103,6 +126,6 @@ object MergingLogic {
   /** if produce is copied by peek in one index and originated in another - it is considered as created in aggregate*/
   def combineProducesCopiedByPeek(x: EventLogIndex, y: EventLogIndex): Set[Produce] =
     Seq(x, y)
-      .map(_.producesCopiedByPeek)
+      .map(_.producesExistingInPreState)
       .reduce(_ ++ _) diff Seq(x, y).map(producesCreated).reduce(_ ++ _)
 }

@@ -1,5 +1,8 @@
 package coop.rchain.rspace
 
+import cats.Show
+import cats.syntax.all._
+
 import scala.annotation.tailrec
 
 package object merger {
@@ -34,7 +37,7 @@ package object merger {
     relationMap.keySet.map(k => addRelations(relationMap(k), Set(k)))
   }
 
-  def computeRejectionOptions[A](conflictMap: Map[A, Set[A]]): Set[Set[A]] = {
+  def computeRejectionOptions[A: Show](conflictMap: Map[A, Set[A]]): Set[Set[A]] = {
     @tailrec
     def process(newSet: Set[A], acc: Set[A], reject: Boolean): Set[A] = {
       // stop if all new dependencies are already in set
@@ -47,6 +50,20 @@ package object merger {
         process(next, next, !reject)
       }
     }
+    val matrixSize = conflictMap.size
+    def row(conflictingIdsx: Set[Int]) =
+      (1 to matrixSize).map(i => if (conflictingIdsx.contains(i)) "C" else "-").mkString(" ")
+    val table = conflictMap.toList
+      .sortBy { case (i, _) => i.show.toInt }
+      .map {
+        case (_, conflicts) =>
+          row(conflicts.map(_.show.toInt))
+      }
+      .mkString("\n")
+
+    println(
+      s"CONFLICT MAP: \n$table"
+    )
     // each rejection option is defined by decision not to reject a key in rejection map
     conflictMap
     // only keys that have conflicts associated should be examined
