@@ -12,6 +12,7 @@ import coop.rchain.casper._
 import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.casper.engine.EngineCell.EngineCell
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.util.comm.CommUtil
 import coop.rchain.casper.util.rholang.RuntimeManager
 import coop.rchain.comm.PeerNode
@@ -33,8 +34,7 @@ class GenesisValidator[F[_]
   /* Storage */     : BlockStore: BlockDagStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
   /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
 (
-    blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-    blocksInProcessing: Ref[F, Set[BlockHash]],
+    casperStateManager: CasperStateManager[F],
     casperShardConf: CasperShardConf,
     validatorId: ValidatorIdentity,
     blockApprover: BlockApproverProtocol
@@ -61,8 +61,7 @@ class GenesisValidator[F[_]
             .unapprovedBlockPacketHandler(peer, ub) >> {
             Engine
               .transitionToInitializing(
-                blockProcessingQueue,
-                blocksInProcessing,
+                casperStateManager,
                 casperShardConf,
                 Some(validatorId),
                 init = noop

@@ -1,6 +1,6 @@
 package coop.rchain.casper
 
-import cats.effect.concurrent.Ref
+import cats.effect.concurrent.{Ref, Semaphore}
 import cats.effect.{Concurrent, Sync}
 import cats.syntax.all._
 import cats.{Applicative, Monad, Show}
@@ -9,8 +9,11 @@ import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.blockstorage.dag.{BlockDagRepresentation, BlockDagStorage}
 import coop.rchain.blockstorage.deploy.DeployStorage
+import coop.rchain.blockstorage.state.CasperStateValidated
+import coop.rchain.casper.BlockStatus.{Offence, Validated}
 import coop.rchain.casper.engine.{BlockRetriever, Running}
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.casper.util.comm.CommUtil
@@ -49,7 +52,10 @@ object DeployError {
 }
 
 trait Casper[F[_]] {
-  def getSnapshot(targetBlockOpt: Option[BlockMessage] = None): F[CasperSnapshot[F]]
+//  def getSnapshot(
+//      targetBlockOpt: Option[BlockMessage] = None,
+//      targetDag: Option[CasperVaidatedST] = None
+//  ): F[CasperSnapshot[F]]
   def contains(hash: BlockHash): F[Boolean]
   def dagContains(hash: BlockHash): F[Boolean]
   def bufferContains(hash: BlockHash): F[Boolean]
@@ -59,11 +65,11 @@ trait Casper[F[_]] {
   def getValidator: F[Option[ValidatorIdentity]]
   def getVersion: F[Long]
 
-  def validate(b: BlockMessage, s: CasperSnapshot[F]): F[Either[BlockError, ValidBlock]]
+  def validate(b: BlockMessage, s: CasperSnapshot[F]): F[Option[Offence]]
   def handleValidBlock(block: BlockMessage): F[BlockDagRepresentation[F]]
   def handleInvalidBlock(
       block: BlockMessage,
-      status: InvalidBlock,
+      status: Offence,
       dag: BlockDagRepresentation[F]
   ): F[BlockDagRepresentation[F]]
   def getDependencyFreeFromBuffer: F[List[BlockMessage]]
@@ -94,7 +100,7 @@ object Casper {
     val hasParentsToMerge = (s.parents.map(_.body.state.postStateHash).distinct.size > 1).pure[F]
     val hasDeploysToOffer = deploysWaiting.map(_ -- s.deploysInScope).map(_.nonEmpty)
     val needToSlash       = bondedOffenders(s).map(_.nonEmpty)
-    val noAcquiescence    = s.dag.reachedAcquiescence.not
+    val noAcquiescence    = s.acquiescence.pure.not
     hasDeploysToOffer ||^ hasParentsToMerge ||^ needToSlash ||^ noAcquiescence
   }
 
@@ -122,23 +128,6 @@ object MultiParentCasper extends MultiParentCasperInstances {
     kp2(().pure)
 }
 
-/**
-  * Casper snapshot is a state that is changing in discrete manner with each new block added.
-  * This class represents full information about the state. It is required for creating new blocks
-  * as well as for validating blocks.
-  */
-final case class CasperSnapshot[F[_]](
-    dag: BlockDagRepresentation[F],
-    lastFinalizedBlock: BlockHash,
-    parents: List[BlockMessage],
-    justifications: Set[Justification],
-    invalidBlocks: Map[Validator, BlockHash],
-    deploysInScope: Set[Signed[DeployData]],
-    maxBlockNum: Long,
-    maxSeqNums: Map[Validator, Int],
-    onChainState: OnChainCasperState
-)
-
 final case class OnChainCasperState(
     shardConf: CasperShardConf,
     bondsMap: Map[Validator, Long],
@@ -164,6 +153,26 @@ final case class CasperShardConf(
     epochLength: Int,
     quarantineLength: Int
 )
+object CasperShardConf {
+  // TODO this should be read from the chain state
+  def fromCasperConf(conf: CasperConf) = CasperShardConf(
+    conf.faultToleranceThreshold,
+    conf.shardName,
+    conf.parentShardId,
+    conf.finalizationRate,
+    conf.maxNumberOfParents,
+    conf.maxParentDepth.getOrElse(Int.MaxValue),
+    conf.synchronyConstraintThreshold.toFloat,
+    conf.heightConstraintThreshold,
+    50,
+    1,
+    1,
+    conf.genesisBlockData.bondMinimum,
+    conf.genesisBlockData.bondMaximum,
+    conf.genesisBlockData.epochLength,
+    conf.genesisBlockData.quarantineLength
+  )
+}
 
 sealed abstract class MultiParentCasperInstances {
   implicit val MetricsSource: Metrics.Source =
@@ -172,7 +181,8 @@ sealed abstract class MultiParentCasperInstances {
   def hashSetCasper[F[_]: Sync: Metrics: Concurrent: CommUtil: Log: Time: SafetyOracle: BlockStore: BlockDagStorage: Span: EventPublisher: SynchronyConstraintChecker: LastFinalizedHeightConstraintChecker: Estimator: DeployStorage: CasperBufferStorage: BlockRetriever](
       validatorId: Option[ValidatorIdentity],
       casperShardConf: CasperShardConf,
-      approvedBlock: BlockMessage
+      approvedBlock: BlockMessage,
+      casperStateManager: CasperStateManager[F]
   )(implicit runtimeManager: RuntimeManager[F]): F[MultiParentCasper[F]] =
     for {
       _ <- ().pure
@@ -180,7 +190,8 @@ sealed abstract class MultiParentCasperInstances {
       new MultiParentCasperImpl(
         validatorId,
         casperShardConf,
-        approvedBlock
+        approvedBlock,
+        casperStateManager
       )
     }
 }

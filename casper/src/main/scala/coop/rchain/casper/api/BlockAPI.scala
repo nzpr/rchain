@@ -66,7 +66,7 @@ object BlockAPI {
                 )
               )
         // call a propose if proposer defined
-        _ <- triggerPropose.traverse(_(casper, true))
+        // _ <- triggerPropose.traverse(_(casper, true))
       } yield r
 
     // Check if deploy is signed with system keys
@@ -98,35 +98,35 @@ object BlockAPI {
   def createBlock[F[_]: Concurrent: EngineCell: Log](
       triggerProposeF: ProposeFunction[F],
       isAsync: Boolean = false
-  ): F[ApiErr[String]] = {
-    def logDebug(err: String)  = Log[F].debug(err) >> err.asLeft[String].pure[F]
-    def logSucess(msg: String) = Log[F].info(msg) >> msg.asRight[Error].pure[F]
-    def logWarn(msg: String)   = Log[F].warn(msg) >> msg.asLeft[String].pure[F]
-    EngineCell[F].read >>= (
-      _.withCasper[ApiErr[String]](
-        casper =>
-          for {
-            // Trigger propose
-            proposerResult <- triggerProposeF(casper, isAsync)
-            r <- proposerResult match {
-                  case ProposerEmpty =>
-                    logDebug(s"Failure: another propose is in progress")
-                  case ProposerFailure(status, seqNumber) =>
-                    logDebug(s"Failure: $status (seqNum $seqNumber)")
-                  case ProposerStarted(seqNumber) =>
-                    logSucess(s"Propose started (seqNum $seqNumber)")
-                  case ProposerSuccess(_, block) =>
-                    // TODO: [WARNING] Format of this message is hardcoded in pyrchain when checking response result
-                    //  Fix to use structured result with transport errors/codes.
-                    // https://github.com/rchain/pyrchain/blob/a2959c75bf/rchain/client.py#L42
-                    val blockHashHex = block.blockHash.base16String
-                    logSucess(s"Success! Block $blockHashHex created and added.")
-                }
-          } yield r,
-        default = logWarn("Failure: casper instance is not available.")
-      )
-    )
-  }
+  ): F[ApiErr[String]] =
+    "do not call this".asLeft[String].pure[F]
+//    def logDebug(err: String)  = Log[F].debug(err) >> err.asLeft[String].pure[F]
+//    def logSucess(msg: String) = Log[F].info(msg) >> msg.asRight[Error].pure[F]
+//    def logWarn(msg: String)   = Log[F].warn(msg) >> msg.asLeft[String].pure[F]
+//    EngineCell[F].read >>= (
+//      _.withCasper[ApiErr[String]](
+//        casper =>
+//          for {
+//            // Trigger propose
+//            proposerResult <- triggerProposeF(casper, isAsync)
+//            r <- proposerResult match {
+//                  case ProposerEmpty =>
+//                    logDebug(s"Failure: another propose is in progress")
+//                  case ProposerFailure(status, seqNumber) =>
+//                    logDebug(s"Failure: $status (seqNum $seqNumber)")
+//                  case ProposerStarted(seqNumber) =>
+//                    logSucess(s"Propose started (seqNum $seqNumber)")
+//                  case ProposerSuccess(_, block) =>
+//                    // TODO: [WARNING] Format of this message is hardcoded in pyrchain when checking response result
+//                    //  Fix to use structured result with transport errors/codes.
+//                    // https://github.com/rchain/pyrchain/blob/a2959c75bf/rchain/client.py#L42
+//                    val blockHashHex = block.blockHash.base16String
+//                    logSucess(s"Success! Block $blockHashHex created and added.")
+//                }
+//          } yield r,
+//        default = logWarn("Failure: casper instance is not available.")
+//      )
+//    )
 
   // Get result of the propose
   def getProposeResult[F[_]: Concurrent: Log](

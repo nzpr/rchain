@@ -12,18 +12,28 @@ import coop.rchain.comm.PeerNode
 import coop.rchain.p2p.effects._
 import coop.rchain.shared.Log
 import com.google.protobuf.ByteString
+import coop.rchain.casper.state.CasperState
 import coop.rchain.comm.protocol.routing.Packet
 import coop.rchain.metrics.Metrics.Source
 import coop.rchain.metrics.MetricsSemaphore
+import coop.rchain.models.BlockHash.BlockHash
+import fs2.Pipe
+import fs2.concurrent.Queue
 
 object CasperPacketHandler {
-  def apply[F[_]: FlatMap: EngineCell: Log]: PacketHandler[F] =
+  def apply[F[_]: FlatMap: EngineCell: Log](
+      blockProcessingQueue: Queue[F, BlockMessage]
+  ): PacketHandler[F] =
     (peer: PeerNode, packet: Packet) =>
       toCasperMessageProto(packet).toEither
         .flatMap(proto => CasperMessage.from(proto))
         .fold(
           err => Log[F].warn(s"Could not extract casper message from packet sent by $peer: $err"),
-          message => EngineCell[F].read >>= (_.handle(peer, message))
+          message =>
+            message match {
+              case b: BlockMessage => blockProcessingQueue.enqueue1(b)
+              case _               => EngineCell[F].read >>= (_.handle(peer, message))
+            }
         )
 
   def fairDispatcher[F[_]: Concurrent: EngineCell: Log: Span: Metrics](

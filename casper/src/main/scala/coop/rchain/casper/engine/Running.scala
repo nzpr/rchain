@@ -1,16 +1,17 @@
 package coop.rchain.casper.engine
 
 import cats.effect.{Concurrent, Sync}
-import cats.effect.concurrent.Ref
 import cats.syntax.all._
 import cats.{Applicative, Monad}
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.blockstorage.dag.BlockDagStorage
+import coop.rchain.blockstorage.state.CasperStateValidated
 import coop.rchain.casper._
 import coop.rchain.casper.engine.EngineCell.EngineCell
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.shared.syntax._
 import coop.rchain.casper.util.ProtoUtil
@@ -18,15 +19,15 @@ import coop.rchain.casper.util.comm.CommUtil
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
 import coop.rchain.comm.transport.TransportLayer
-import coop.rchain.metrics.{Metrics, MetricsSemaphore}
+import coop.rchain.metrics.Metrics
 import coop.rchain.models.BlockHash.BlockHash
+import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.{RSpaceExporter, RSpaceStateManager}
-import fs2.concurrent.Queue
 import coop.rchain.shared.{Log, Time}
+import fs2.Pipe
 import fs2.Stream
 
-import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration._
 
 object Running {
@@ -95,25 +96,8 @@ object Running {
   def handleBlockHashMessage[F[_]: Monad: BlockRetriever: Log](
       peer: PeerNode,
       bhm: BlockHashMessage
-  )(
-      ignoreMessageF: BlockHash => F[Boolean]
-  ): F[Unit] = {
-    val h = bhm.blockHash
-    def logIgnore = Log[F].debug(
-      s"Ignoring ${PrettyPrinter.buildString(h)} hash broadcast"
-    )
-    val logSuccess = Log[F].debug(
-      s"Incoming BlockHashMessage ${PrettyPrinter.buildString(h)} " +
-        s"from ${peer.endpoint.host}"
-    )
-    val processHash =
-      BlockRetriever[F].admitHash(h, peer.some, BlockRetriever.HashBroadcastRecieved)
-
-    ignoreMessageF(h).ifM(
-      logIgnore,
-      logSuccess >> processHash.void
-    )
-  }
+  ): F[Unit] =
+    BlockRetriever[F].admitHash(bhm.blockHash, peer.some, BlockRetriever.HashBroadcastRecieved).void
 
   /**
     * Peer says it has particular block.
@@ -121,24 +105,8 @@ object Running {
   def handleHasBlockMessage[F[_]: Monad: BlockRetriever: Log](
       peer: PeerNode,
       hb: HasBlock
-  )(
-      ignoreMessageF: BlockHash => F[Boolean]
-  ): F[Unit] = {
-    val h = hb.hash
-    def logIgnore = Log[F].debug(
-      s"Ignoring ${PrettyPrinter.buildString(h)} HasBlockMessage"
-    )
-    val logProcess = Log[F].debug(
-      s"Incoming HasBlockMessage ${PrettyPrinter.buildString(h)} from ${peer.endpoint.host}"
-    )
-    val processHash =
-      BlockRetriever[F].admitHash(h, peer.some, BlockRetriever.HasBlockMessageReceived)
-
-    ignoreMessageF(h).ifM(
-      logIgnore,
-      logProcess >> processHash.void
-    )
-  }
+  ): F[Unit] =
+    BlockRetriever[F].admitHash(hb.hash, peer.some, BlockRetriever.HasBlockMessageReceived).void
 
   /**
     * Peer asks for particular block
@@ -254,8 +222,7 @@ class Running[F[_]
   /* Storage */     : BlockStore: BlockDagStorage: CasperBufferStorage: RSpaceStateManager
   /* Diagnostics */ : Log: Metrics] // format: on
 (
-    blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-    blocksInProcessing: Ref[F, Set[BlockHash]],
+    casperStateManager: CasperStateManager[F],
     casper: MultiParentCasper[F],
     approvedBlock: ApprovedBlock,
     validatorId: Option[ValidatorIdentity],
@@ -265,57 +232,51 @@ class Running[F[_]
 
   import Engine._
   import Running._
-  import coop.rchain.catscontrib.Catscontrib._
 
   private val F    = Applicative[F]
   private val noop = F.unit
 
-  private def ignoreCasperMessage(hash: BlockHash): F[Boolean] =
-    blocksInProcessing.get.map(_.contains(hash)) ||^
-      casper.bufferContains(hash) ||^
-      casper.dagContains(hash)
-
   override def init: F[Unit] = theInit
 
+  def knownMessage(h: BlockHash) = casperStateManager.getStateRef.get.map(_.known(h))
+
   override def handle(peer: PeerNode, msg: CasperMessage): F[Unit] = msg match {
+
     case h: BlockHashMessage =>
-      handleBlockHashMessage(peer, h)(
-        ignoreCasperMessage
-      )
-    case b: BlockMessage =>
-      for {
-        _ <- casper.getValidator.flatMap {
-              case None => ().pure[F]
-              case Some(id) =>
-                F.whenA(b.sender == ByteString.copyFrom(id.publicKey.bytes))(
-                  Log[F].warn(
-                    s"There is another node $peer proposing using the same private key as you. " +
-                      s"Or did you restart your node?"
-                  )
-                )
-            }
-        _ <- ignoreCasperMessage(b.blockHash).ifM(
-              Log[F].debug(
-                s"Ignoring BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              ),
-              blockProcessingQueue.enqueue1(casper, b) <* Log[F].debug(
-                s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              )
-            )
-      } yield ()
+      knownMessage(h.blockHash).ifM(().pure[F], handleBlockHashMessage(peer, h))
+
+//    case b: BlockMessage => {
+//      val logIncoming =
+//        Log[F].debug(
+//          s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} from ${peer.endpoint.host}"
+//        )
+//      val logCloneFound =
+//        Log[F].debug(
+//          s"There is another node $peer proposing using the same private key as you. Or did you restart your node?"
+//        )
+//      def senderIsSelf(s: ValidatorIdentity) = b.sender == ByteString.copyFrom(s.publicKey.bytes)
+//      val process                            = logIncoming <* processBlockMessage(b)
+//
+//      for {
+//        selfValidatorOpt <- casper.getValidator
+//        r <- selfValidatorOpt
+//              .map(id => if (senderIsSelf(id)) logCloneFound else process)
+//              .getOrElse(process)
+//      } yield r
+//    }
 
     case br: BlockRequest => handleBlockRequest(peer, br)
     // TODO should node say it has block only after it is in DAG, or CasperBuffer is enough? Or even just BlockStore?
     // https://github.com/rchain/rchain/pull/2943#discussion_r449887701
     case hbr: HasBlockRequest => handleHasBlockRequest(peer, hbr)(casper.dagContains)
-    case hb: HasBlock         => handleHasBlockMessage(peer, hb)(ignoreCasperMessage)
+    case hb: HasBlock =>
+      knownMessage(hb.hash).ifM(().pure[F], handleHasBlockMessage(peer, hb))
+
     case _: ForkChoiceTipRequest.type =>
       handleForkChoiceTipRequest(peer)(casper)
     case abr: ApprovedBlockRequest =>
       for {
-        lfBlockHash <- BlockDagStorage[F].getRepresentation.map(_.lastFinalizedBlock)
+        lfBlockHash <- BlockDagStorage[F].getRepresentation().map(_.lastFinalizedBlock)
 
         // Create approved block from last finalized block
         lastFinalizedBlock = for {

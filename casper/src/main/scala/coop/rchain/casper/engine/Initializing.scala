@@ -8,10 +8,10 @@ import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.blockstorage.deploy.DeployStorage
 import coop.rchain.casper.LastApprovedBlock.LastApprovedBlock
-import coop.rchain.casper.ValidBlock.Valid
 import coop.rchain.casper._
 import coop.rchain.casper.engine.EngineCell._
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.casper.util.comm.CommUtil
@@ -22,8 +22,6 @@ import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.{BindPattern, ListParWithRandom, Par, TaggedContinuation}
-import coop.rchain.rholang.interpreter.storage
 import coop.rchain.rspace.state.{RSpaceImporter, RSpaceStateManager}
 import coop.rchain.shared
 import coop.rchain.shared._
@@ -45,8 +43,7 @@ class Initializing[F[_]
   /* Storage */     : BlockStore: BlockDagStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
   /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
 (
-    blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-    blocksInProcessing: Ref[F, Set[BlockHash]],
+    casperStateManager: CasperStateManager[F],
     casperShardConf: CasperShardConf,
     validatorId: Option[ValidatorIdentity],
     theInit: F[Unit],
@@ -198,7 +195,7 @@ class Initializing[F[_]
       // TODO: validate genesis (zero) block correctly
       true.pure
     } else
-      Validate.blockHash(block).map(_ == Right(Valid))
+      Validate.blockHash(block).map(_.isEmpty)
   }
 
   private def populateDag(
@@ -248,12 +245,12 @@ class Initializing[F[_]
                  .hashSetCasper[F](
                    validatorId,
                    casperShardConf,
-                   ab
+                   ab,
+                   casperStateManager
                  )
       _ <- Log[F].info("MultiParentCasper instance created.")
       _ <- transitionToRunning[F](
-            blockProcessingQueue,
-            blocksInProcessing,
+            casperStateManager,
             casper,
             approvedBlock,
             validatorId,

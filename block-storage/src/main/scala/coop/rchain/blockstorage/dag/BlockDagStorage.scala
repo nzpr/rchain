@@ -2,13 +2,17 @@ package coop.rchain.blockstorage.dag
 
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
+import coop.rchain.blockstorage.state.CasperStateValidated
 import coop.rchain.casper.protocol.BlockMessage
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
+import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.{BlockMetadata, EquivocationRecord}
 
 trait BlockDagStorage[F[_]] {
-  def getRepresentation: F[BlockDagRepresentation[F]]
+  def getRepresentation(
+      targetState: Option[CasperStateValidated] = None
+  ): F[BlockDagRepresentation[F]]
   def insert(
       block: BlockMessage,
       invalid: Boolean,
@@ -50,6 +54,7 @@ trait BlockDagRepresentation[F[_]] {
       findLfb: Map[Validator, BlockHash] => F[BlockHash]
   ): F[BlockDagRepresentation[F]]
   def reachedAcquiescence: F[Boolean]
+  def getPureState: CasperStateValidated
 }
 
 trait EquivocationsTracker[F[_]] {

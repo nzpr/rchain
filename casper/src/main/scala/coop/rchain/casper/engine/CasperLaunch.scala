@@ -12,6 +12,7 @@ import coop.rchain.casper.LastApprovedBlock.LastApprovedBlock
 import coop.rchain.casper._
 import coop.rchain.casper.engine.EngineCell._
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.comm._
 import coop.rchain.casper.util.rholang.RuntimeManager
@@ -40,31 +41,15 @@ object CasperLaunch {
     /* Storage */     : BlockStore: BlockDagStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
     /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
   (
-      blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-      blocksInProcessing: Ref[F, Set[BlockHash]],
+      blockProcessingQueue: Queue[F, BlockMessage],
       proposeFOpt: Option[ProposeFunction[F]],
       conf: CasperConf,
       trimState: Boolean,
-      disableStateExporter: Boolean
+      disableStateExporter: Boolean,
+      casperStateManager: CasperStateManager[F]
   ): CasperLaunch[F] =
     new CasperLaunch[F] {
-      val casperShardConf = CasperShardConf(
-        conf.faultToleranceThreshold,
-        conf.shardName,
-        conf.parentShardId,
-        conf.finalizationRate,
-        conf.maxNumberOfParents,
-        conf.maxParentDepth.getOrElse(Int.MaxValue),
-        conf.synchronyConstraintThreshold.toFloat,
-        conf.heightConstraintThreshold,
-        50,
-        1,
-        1,
-        conf.genesisBlockData.bondMinimum,
-        conf.genesisBlockData.bondMaximum,
-        conf.genesisBlockData.epochLength,
-        conf.genesisBlockData.quarantineLength
-      )
+      val casperShardConf = CasperShardConf.fromCasperConf(conf)
       def launch(): F[Unit] =
         BlockStore[F].getApprovedBlock map {
           case Some(approvedBlock) =>
@@ -129,7 +114,7 @@ object CasperLaunch {
                               )
                               .whenA(dc)
                         _ <- BlockRetriever[F].ackReceive(hash)
-                        _ <- blockProcessingQueue.enqueue1((casper, block))
+                        _ <- blockProcessingQueue.enqueue1(block)
                       } yield ()
                   )
           } yield ()
@@ -141,18 +126,18 @@ object CasperLaunch {
                      .hashSetCasper[F](
                        validatorId,
                        casperShardConf,
-                       ab
+                       ab,
+                       casperStateManager
                      )
           init = for {
             _ <- askPeersForForkChoiceTips
             _ <- sendBufferPendantsToCasper(casper)
             // try to propose (async way) if proposer is defined
-            _ <- proposeFOpt.traverse(p => p(casper, true))
+            //_ <- proposeFOpt.traverse(p => p(casper, true))
           } yield ()
           _ <- Engine
                 .transitionToRunning[F](
-                  blockProcessingQueue,
-                  blocksInProcessing,
+                  casperStateManager,
                   casper,
                   approvedBlock,
                   validatorId,
@@ -186,8 +171,7 @@ object CasperLaunch {
                 )(Sync[F])
           _ <- EngineCell[F].set(
                 new GenesisValidator(
-                  blockProcessingQueue,
-                  blocksInProcessing,
+                  casperStateManager,
                   casperShardConf,
                   validatorId.get,
                   bap
@@ -220,8 +204,7 @@ object CasperLaunch {
           _ <- Concurrent[F].start(
                 GenesisCeremonyMaster
                   .waitingForApprovedBlockLoop[F](
-                    blockProcessingQueue,
-                    blocksInProcessing,
+                    casperStateManager,
                     casperShardConf,
                     validatorId,
                     disableStateExporter
@@ -237,8 +220,7 @@ object CasperLaunch {
         for {
           validatorId <- ValidatorIdentity.fromPrivateKeyWithLogging[F](conf.validatorPrivateKey)
           _ <- Engine.transitionToInitializing(
-                blockProcessingQueue,
-                blocksInProcessing,
+                casperStateManager,
                 casperShardConf,
                 validatorId,
                 // TODO peer should be able to request approved blocks on different heights

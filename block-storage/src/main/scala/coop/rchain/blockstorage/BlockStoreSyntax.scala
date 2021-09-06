@@ -36,13 +36,8 @@ final class BlockStoreOps[F[_]: Sync](
     * https://github.com/typelevel/cats-effect/pull/854
     * So extra source parameters are a desperate measure to indicate who is the caller.
     */
-  def getUnsafe(hash: BlockHash)(
-      implicit line: sourcecode.Line,
-      file: sourcecode.File,
-      enclosing: sourcecode.Enclosing
-  ): F[BlockMessage] = {
-    def source = s"${file.value}:${line.value} ${enclosing.value}"
-    def errMsg = s"BlockStore is missing hash ${PrettyPrinter.buildString(hash)}\n  $source"
+  def getUnsafe(hash: BlockHash): F[BlockMessage] = {
+    def errMsg = s"BlockStore is missing hash ${PrettyPrinter.buildString(hash)}\n"
     blockStore.get(hash) >>= (_.liftTo(BlockStoreInconsistencyError(errMsg)))
   }
 

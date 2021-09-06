@@ -309,7 +309,7 @@ object TransactionBalances {
       rnodeStoreManager <- RNodeKeyValueStoreManager[F](dataDir, legacyRSpaceDirSupport)
       blockStore        <- KeyValueBlockStore(rnodeStoreManager)
       blockDagStorage   <- BlockDagKeyValueStorage.create[F](rnodeStoreManager)
-      dagRepresantation <- blockDagStorage.getRepresentation
+      dagRepresantation <- blockDagStorage.getRepresentation()
       store             <- rnodeStoreManager.rSpaceStores
       spaces <- RSpace
                  .createWithReplay[F, Par, BindPattern, ListParWithRandom, TaggedContinuation](

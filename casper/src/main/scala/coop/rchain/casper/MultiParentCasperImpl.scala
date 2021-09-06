@@ -1,6 +1,6 @@
 package coop.rchain.casper
 
-import cats.data.EitherT
+import cats.data.{EitherT, OptionT}
 import cats.effect.{Concurrent, Sync}
 import cats.syntax.all._
 import coop.rchain.blockstorage._
@@ -8,14 +8,18 @@ import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.blockstorage.dag.{BlockDagRepresentation, BlockDagStorage}
 import coop.rchain.blockstorage.deploy.DeployStorage
+import coop.rchain.blockstorage.state.CasperStateValidated
+import coop.rchain.casper.BlockStatus._
 import coop.rchain.casper.engine.BlockRetriever
 import coop.rchain.casper.finality.Finalizer
 import coop.rchain.casper.merging.BlockIndex
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ProtoUtil._
 import coop.rchain.casper.util._
 import coop.rchain.casper.util.comm.CommUtil
+import coop.rchain.casper.util.rholang.RuntimeManager.StateHash
 import coop.rchain.casper.util.rholang._
 import coop.rchain.catscontrib.Catscontrib.ToBooleanF
 import coop.rchain.crypto.signatures.Signed
@@ -41,8 +45,10 @@ class MultiParentCasperImpl[F[_]
     validatorId: Option[ValidatorIdentity],
     // todo this should be read from chain, for now read from startup options
     casperShardConf: CasperShardConf,
-    approvedBlock: BlockMessage
+    approvedBlock: BlockMessage,
+    casperStateManager: CasperStateManager[F]
 ) extends MultiParentCasper[F] {
+
   import MultiParentCasperImpl._
 
   implicit private val logSource: LogSource = LogSource(this.getClass)
@@ -56,13 +62,14 @@ class MultiParentCasperImpl[F[_]
 
   def getApprovedBlock: F[BlockMessage] = approvedBlock.pure[F]
 
-  private def updateLastFinalizedBlock(newBlock: BlockMessage): F[Unit] =
-    lastFinalizedBlock.whenA(
-      newBlock.body.state.blockNumber % casperShardConf.finalizationRate == 0
-    )
+//  private def updateLastFinalizedBlock(newBlock: BlockMessage): F[Unit] =
+//    lastFinalizedBlock.whenA(
+//      newBlock.body.state.blockNumber % casperShardConf.finalizationRate == 0
+//    )
 
   /**
     * Check if there are blocks in CasperBuffer available with all dependencies met.
+    *
     * @return First from the set of available blocks
     */
   override def getDependencyFreeFromBuffer: F[List[BlockMessage]] = {
@@ -149,7 +156,7 @@ class MultiParentCasperImpl[F[_]
   }
 
   def blockDag: F[BlockDagRepresentation[F]] =
-    BlockDagStorage[F].getRepresentation
+    BlockDagStorage[F].getRepresentation()
 
   def normalizedInitialFault(weights: Map[Validator, Long]): F[Float] =
     BlockDagStorage[F].accessEquivocationsTracker { tracker =>
@@ -184,286 +191,20 @@ class MultiParentCasperImpl[F[_]
     } yield ()
   }
 
-  override def getSnapshot(targetMessageOpt: Option[BlockMessage]): F[CasperSnapshot[F]] = {
-    import cats.instances.list._
+  def validate(b: BlockMessage, s: CasperSnapshot[F]): F[Option[Offence]] =
+    MultiParentCasperImpl.validate(b, s)
 
-    def computeOnChainState(b: BlockMessage): F[OnChainCasperState] =
-      for {
-        av <- RuntimeManager[F].getActiveValidators(b.body.state.postStateHash)
-        // bonds are available in block message, but please remember this is just a cache, source of truth is RSpace.
-        bm          = b.body.state.bonds
-        shardConfig = casperShardConf
-      } yield OnChainCasperState(shardConfig, bm.map(v => v.validator -> v.stake).toMap, av)
+  def handleValidBlock(block: BlockMessage): F[BlockDagRepresentation[F]] =
+    // TODO usage of blockDag here violates state access, state should be only in stateManager
+    OptionT(MultiParentCasperImpl.validatedEff(block, none[Offence])).getOrElseF(blockDag)
 
-    // parents do not include invalid latest messages and share the same bonds map
-    def computeParents(dag: BlockDagRepresentation[F]): F[List[BlockMessage]] =
-      for {
-        r         <- Estimator[F].tips(dag, approvedBlock)
-        (_, tips) = (r.lca, r.tips)
-
-        /**
-          * Before block merge, `EstimatorHelper.chooseNonConflicting` were used to filter parents, as we could not
-          * have conflicting parents. With introducing block merge, all parents that share the same bonds map
-          * should be parents. Parents that have different bond maps are only one that cannot be merged in any way.
-          */
-        // For now main parent bonds map taken as a reference, but might be we want to pick a subset with equal
-        // bond maps that has biggest cumulative stake.
-        blocks  <- tips.toList.traverse(BlockStore[F].getUnsafe)
-        parents = blocks.filter(b => b.body.state.bonds == blocks.head.body.state.bonds)
-      } yield parents
-
-    /**
-      * Justifications might include invalid latest messages and should be bonded in parents
-      * We ensure that only the justifications given in the block are those
-      * which are bonded validators in the chosen parent. This is safe because
-      * any latest message not from a bonded validator will not change the
-      * final fork-choice.
-      */
-    def computeJustifications(
-        dag: BlockDagRepresentation[F],
-        onChainState: OnChainCasperState
-    ): F[Map[Validator, BlockHash]] =
-      dag.latestMessageHashes.map(_.filterKeys(onChainState.bondsMap.keySet.contains(_)))
-
-    for {
-      // the most recent view on the DAG, includes everything node seen so far
-      fullDag <- BlockDagStorage[F].getRepresentation
-
-      getBlockView = (m: BlockMessage) =>
-        for {
-          p <- m.header.parentsHashList.traverse(BlockStore[F].getUnsafe)
-          s <- computeOnChainState(p.head)
-          j = m.justifications.map { case Justification(v, h) => (v, h) }.toMap
-
-          findLfb = (latestMessages: Map[Validator, BlockHash]) =>
-            for {
-              minNum       <- p.map(_.blockHash).traverse(fullDag.lookupUnsafe).map(_.map(_.blockNum).min)
-              lowestHeight = minNum - Finalizer.MaxSearchDepth // lowest height puts a constraint on search area
-
-              lfb <- fullDag
-                      .findLastFinalizedBlock(
-                        latestMessagesView = latestMessages,
-                        faultToleranceThreshold = casperShardConf.faultToleranceThreshold,
-                        lowestHeight = lowestHeight
-                      )
-                      .flatMap { lfbOpt =>
-                        // if approved block is in search range - return it.
-                        // This is required because genesis has fault tolerance less then max value so wont be finalized for
-                        // all thresholds.
-                        // Also in future approved block restored from LFS might be finalized with fault tolerance less then current
-                        // fault tolerance from shard config
-
-                        val approvedBlockIsInRange = fullDag
-                          .lookupUnsafe(approvedBlock.blockHash)
-                          .map(_.blockNum)
-                          .map(_ >= lowestHeight)
-
-                        val notFoundF = approvedBlockIsInRange.ifM(
-                          approvedBlock.blockHash.pure[F], {
-                            val lfbNotFoundErrMsg = s"No last finalized block found when creating casper snapshot for " +
-                              s"${targetMessageOpt.map(PrettyPrinter.buildString(_)).getOrElse("the most recent view")}."
-                            new Exception(lfbNotFoundErrMsg).raiseError[F, BlockHash]
-                          }
-                        )
-                        lfbOpt.map(_.pure[F]).getOrElse(notFoundF)
-                      }
-            } yield lfb
-          dagView <- fullDag.truncate(j, findLfb)
-        } yield (dagView, p, s, j)
-
-      getLatestView = for {
-        p <- computeParents(fullDag)
-        s <- computeOnChainState(p.head)
-        j <- computeJustifications(fullDag, s)
-      } yield (fullDag, p, s, j)
-
-      // if target message supplied, create dag view, otherwise get the most recent view
-      view                                         <- targetMessageOpt.map(getBlockView).getOrElse(getLatestView)
-      (dag, parents, onChainState, justifications) = view
-      lfb                                          = dag.lastFinalizedBlock
-
-      parentMetas <- parents.map(_.blockHash).traverse(dag.lookupUnsafe)
-      maxBlockNum = parentMetas.map(_.blockNum).max
-      maxSeqNums <- justifications.toList
-                     .traverse {
-                       case (v, h) => dag.lookupUnsafe(h).map((v -> _.seqNum))
-                     }
-                     .map(_.toMap)
-      deploysInScope <- {
-        val currentBlockNumber  = maxBlockNum + 1
-        val earliestBlockNumber = currentBlockNumber - onChainState.shardConf.deployLifespan
-        for {
-          result <- DagOps
-                     .bfTraverseF[F, BlockMetadata](parentMetas)(
-                       b =>
-                         ProtoUtil
-                           .getParentMetadatasAboveBlockNumber(
-                             b,
-                             earliestBlockNumber,
-                             dag
-                           )
-                     )
-                     .foldLeftF(Set.empty[Signed[DeployData]]) { (deploys, blockMetadata) =>
-                       for {
-                         block        <- BlockStore[F].getUnsafe(blockMetadata.blockHash)
-                         blockDeploys = ProtoUtil.deploys(block).map(_.deploy)
-                       } yield deploys ++ blockDeploys
-                     }
-        } yield result
-      }
-      invalidBlocks <- dag.invalidBlocksMap
-    } yield CasperSnapshot(
-      dag,
-      lfb,
-      parents,
-      justifications.map { case (v, h) => Justification(v, h) }.toSet,
-      invalidBlocks,
-      deploysInScope,
-      maxBlockNum,
-      maxSeqNums,
-      onChainState
-    )
-  }
-
-  override def validate(
-      b: BlockMessage,
-      s: CasperSnapshot[F]
-  ): F[Either[BlockError, ValidBlock]] = {
-    val validationProcess: EitherT[F, BlockError, ValidBlock] =
-      for {
-        _ <- EitherT(
-              Validate
-                .blockSummary(b, approvedBlock, s, casperShardConf.shardName, deployLifespan)
-            )
-        _ <- EitherT.liftF(Span[F].mark("post-validation-block-summary"))
-        _ <- EitherT(
-              InterpreterUtil
-                .validateBlockCheckpoint(b, s, RuntimeManager[F])
-                .map {
-                  case Left(ex)       => Left(ex)
-                  case Right(Some(_)) => Right(BlockStatus.valid)
-                  case Right(None)    => Left(BlockStatus.invalidTransaction)
-                }
-            )
-        _ <- EitherT.liftF(Span[F].mark("transactions-validated"))
-        _ <- EitherT(Validate.bondsCache(b, RuntimeManager[F]))
-        _ <- EitherT.liftF(Span[F].mark("bonds-cache-validated"))
-        _ <- EitherT(Validate.neglectedInvalidBlock(b, s))
-        _ <- EitherT.liftF(Span[F].mark("neglected-invalid-block-validated"))
-        _ <- EitherT(
-              EquivocationDetector.checkNeglectedEquivocationsWithUpdate(b, s.dag, approvedBlock)
-            )
-        _      <- EitherT.liftF(Span[F].mark("neglected-equivocation-validated"))
-        depDag <- EitherT.liftF(CasperBufferStorage[F].toDoublyLinkedDag)
-        status <- EitherT(EquivocationDetector.checkEquivocations(depDag, b, s.dag))
-        _      <- EitherT.liftF(Span[F].mark("equivocation-validated"))
-      } yield status
-
-    val indexBlock = for {
-      index <- BlockIndex[F, Par, BindPattern, ListParWithRandom, TaggedContinuation](
-                b.blockHash,
-                b.body.deploys,
-                b.body.systemDeploys,
-                Blake2b256Hash.fromByteString(b.body.state.preStateHash),
-                Blake2b256Hash.fromByteString(b.body.state.postStateHash),
-                RuntimeManager[F].getHistoryRepo
-              )
-      _ = BlockIndex.cache.putIfAbsent(b.blockHash, index)
-    } yield ()
-
-    val validationProcessDiag = for {
-      // Create block and measure duration
-      r                    <- Stopwatch.duration(validationProcess.value)
-      (valResult, elapsed) = r
-      _ <- valResult
-            .map { status =>
-              val blockInfo   = PrettyPrinter.buildString(b, short = true)
-              val deployCount = b.body.deploys.size
-              Log[F].info(s"Block replayed: $blockInfo (${deployCount}d) ($status) [$elapsed]") <*
-                indexBlock.whenA(casperShardConf.maxNumberOfParents > 1)
-            }
-            .getOrElse(().pure[F])
-    } yield valResult
-
-    Log[F].info(s"Validating block ${PrettyPrinter.buildString(b, short = true)}.") *> validationProcessDiag
-  }
-
-  override def handleValidBlock(block: BlockMessage): F[BlockDagRepresentation[F]] =
-    for {
-      updatedDag <- BlockDagStorage[F].insert(block, invalid = false)
-      _          <- CasperBufferStorage[F].remove(block.blockHash)
-      _          <- updateLastFinalizedBlock(block)
-    } yield updatedDag
-
-  override def handleInvalidBlock(
+  def handleInvalidBlock(
       block: BlockMessage,
-      status: InvalidBlock,
+      status: Offence,
       dag: BlockDagRepresentation[F]
-  ): F[BlockDagRepresentation[F]] = {
-    // TODO: Slash block for status except InvalidUnslashableBlock
-    def handleInvalidBlockEffect(
-        status: BlockError,
-        block: BlockMessage
-    ): F[BlockDagRepresentation[F]] =
-      for {
-        _ <- Log[F].warn(
-              s"Recording invalid block ${PrettyPrinter.buildString(block.blockHash)} for ${status.toString}."
-            )
-        // TODO should be nice to have this transition of a block from casper buffer to dag storage atomic
-        r <- BlockDagStorage[F].insert(block, invalid = true)
-        _ <- CasperBufferStorage[F].remove(block.blockHash)
-      } yield r
-
-    status match {
-      case InvalidBlock.AdmissibleEquivocation =>
-        val baseEquivocationBlockSeqNum = block.seqNum - 1
-        for {
-          _ <- BlockDagStorage[F].accessEquivocationsTracker { tracker =>
-                for {
-                  equivocations <- tracker.equivocationRecords
-                  _ <- Sync[F].unlessA(equivocations.exists {
-                        case EquivocationRecord(validator, seqNum, _) =>
-                          block.sender == validator && baseEquivocationBlockSeqNum == seqNum
-                        // More than 2 equivocating children from base equivocation block and base block has already been recorded
-                      }) {
-                        val newEquivocationRecord =
-                          EquivocationRecord(
-                            block.sender,
-                            baseEquivocationBlockSeqNum,
-                            Set.empty[BlockHash]
-                          )
-                        tracker.insertEquivocationRecord(newEquivocationRecord)
-                      }
-                } yield ()
-              }
-          // We can only treat admissible equivocations as invalid blocks if
-          // casper is single threaded.
-          updatedDag <- handleInvalidBlockEffect(InvalidBlock.AdmissibleEquivocation, block)
-        } yield updatedDag
-
-      case InvalidBlock.IgnorableEquivocation =>
-        /*
-         * We don't have to include these blocks to the equivocation tracker because if any validator
-         * will build off this side of the equivocation, we will get another attempt to add this block
-         * through the admissible equivocations.
-         */
-        Log[F]
-          .info(
-            s"Did not add block ${PrettyPrinter.buildString(block.blockHash)} as that would add an equivocation to the BlockDAG"
-          )
-          .as(dag)
-
-      case ib: InvalidBlock if InvalidBlock.isSlashable(ib) =>
-        handleInvalidBlockEffect(ib, block)
-
-      case ib: InvalidBlock =>
-        CasperBufferStorage[F].remove(block.blockHash) >> Log[F]
-          .warn(
-            s"Recording invalid block ${PrettyPrinter.buildString(block.blockHash)} for $ib."
-          )
-          .as(dag)
-    }
-  }
+  ): F[BlockDagRepresentation[F]] =
+    // TODO usage of blockDag here violates state access, state should be only in stateManager
+    OptionT(MultiParentCasperImpl.validatedEff(block, none[Offence])).getOrElseF(blockDag)
 }
 
 object MultiParentCasperImpl {
@@ -511,5 +252,136 @@ object MultiParentCasperImpl {
     val creator = block.sender.base16String
     val seqNum  = block.seqNum
     (blockHash, parentHashes, justificationHashes, deployIds, creator, seqNum)
+  }
+
+  def validate[F[_]: Concurrent: Span: Estimator: RuntimeManager: BlockStore: BlockDagStorage: CasperBufferStorage: Log: Time: Metrics](
+      b: BlockMessage,
+      s: CasperSnapshot[F]
+  ): F[Option[Offence]] = {
+    val validationProcess: OptionT[F, Offence] = for {
+      _ <- Validate.blockSummary(b, s, s.onChainState.shardConf.shardName, deployLifespan)
+      _ <- OptionT.liftF(Span[F].mark("post-validation-block-summary"))
+      _ <- OptionT(InterpreterUtil.validateBlockCheckpoint(b, s, RuntimeManager[F]).flatMap {
+            case Left(BlockException(ex)) => ex.raiseError[F, Option[Offence]]
+            case Right(None)              => invalidTransaction.some.pure[F]
+            case Right(Some(_))           => none[Offence].pure[F]
+          })
+      _ <- OptionT.liftF(Span[F].mark("transactions-validated"))
+      _ <- OptionT(Validate.bondsCache(b, RuntimeManager[F]))
+      _ <- OptionT.liftF(Span[F].mark("bonds-cache-validated"))
+      _ <- OptionT(Validate.neglectedInvalidBlock(b, s))
+      _ <- OptionT.liftF(Span[F].mark("neglected-invalid-block-validated"))
+      _ <- OptionT(
+            EquivocationDetector.checkNeglectedEquivocationsWithUpdate(b, s.dag)
+          )
+      _      <- OptionT.liftF(Span[F].mark("neglected-equivocation-validated"))
+      depDag <- OptionT.liftF(CasperBufferStorage[F].toDoublyLinkedDag)
+      status <- OptionT(EquivocationDetector.checkEquivocations(depDag, b, s.dag))
+      _      <- OptionT.liftF(Span[F].mark("equivocation-validated"))
+    } yield status
+
+    val indexBlock = for {
+      index <- BlockIndex[F, Par, BindPattern, ListParWithRandom, TaggedContinuation](
+                b.blockHash,
+                b.body.deploys,
+                b.body.systemDeploys,
+                Blake2b256Hash.fromByteString(b.body.state.preStateHash),
+                Blake2b256Hash.fromByteString(b.body.state.postStateHash),
+                RuntimeManager[F].getHistoryRepo
+              )
+      _ = BlockIndex.cache.putIfAbsent(b.blockHash, index)
+    } yield ()
+
+    val validationProcessDiag = for {
+      // Create block and measure duration
+      r                    <- Stopwatch.duration(validationProcess.value)
+      (valResult, elapsed) = r
+      _ <- valResult
+            .map { status =>
+              val blockInfo   = PrettyPrinter.buildString(b, short = true)
+              val deployCount = b.body.deploys.size
+              Log[F].info(s"Block replayed: $blockInfo (${deployCount}d) ($status) [$elapsed]") <*
+                indexBlock.whenA(s.onChainState.shardConf.maxNumberOfParents > 1)
+            }
+            .getOrElse(().pure[F])
+    } yield valResult
+
+    Log[F].info(s"Validating block ${PrettyPrinter.buildString(b, short = true)}.") *> validationProcessDiag
+  }
+
+  def validatedEff[F[_]: Sync: BlockDagStorage: CasperBufferStorage: Log](
+      block: BlockMessage,
+      offence: Option[Offence]
+  ): F[Option[BlockDagRepresentation[F]]] = {
+
+    def handleInvalidBlockEffect(
+        status: Offence,
+        block: BlockMessage
+    ): F[BlockDagRepresentation[F]] =
+      for {
+        _ <- Log[F].warn(
+              s"Recording invalid block ${PrettyPrinter.buildString(block.blockHash)} for ${status.toString}."
+            )
+        // TODO should be nice to have this transition of a block from casper buffer to dag storage atomic
+        r <- BlockDagStorage[F].insert(block, invalid = true)
+        _ <- CasperBufferStorage[F].remove(block.blockHash)
+      } yield r
+
+    offence match {
+      case None =>
+        for {
+          updatedDag <- BlockDagStorage[F].insert(block, invalid = false)
+          _          <- CasperBufferStorage[F].remove(block.blockHash)
+        } yield updatedDag.some
+
+      case Some(AdmissibleEquivocation) =>
+        val baseEquivocationBlockSeqNum = block.seqNum - 1
+        for {
+          _ <- BlockDagStorage[F].accessEquivocationsTracker { tracker =>
+                for {
+                  equivocations <- tracker.equivocationRecords
+                  _ <- Sync[F].unlessA(equivocations.exists {
+                        case EquivocationRecord(validator, seqNum, _) =>
+                          block.sender == validator && baseEquivocationBlockSeqNum == seqNum
+                        // More than 2 equivocating children from base equivocation block and base block has already been recorded
+                      }) {
+                        val newEquivocationRecord =
+                          EquivocationRecord(
+                            block.sender,
+                            baseEquivocationBlockSeqNum,
+                            Set.empty[BlockHash]
+                          )
+                        tracker.insertEquivocationRecord(newEquivocationRecord)
+                      }
+                } yield ()
+              }
+          // We can only treat admissible equivocations as invalid blocks if
+          // casper is single threaded.
+          updatedDag <- handleInvalidBlockEffect(AdmissibleEquivocation, block)
+        } yield updatedDag.some
+
+      case Some(IgnorableEquivocation) =>
+        /*
+         * We don't have to include these blocks to the equivocation tracker because if any validator
+         * will build off this side of the equivocation, we will get another attempt to add this block
+         * through the admissible equivocations.
+         */
+        Log[F]
+          .info(
+            s"Did not add block ${PrettyPrinter.buildString(block.blockHash)} as that would add an equivocation to the BlockDAG"
+          )
+          .as(none[BlockDagRepresentation[F]])
+
+      case Some(offence) =>
+        CasperBufferStorage[F].remove(block.blockHash) >>
+          Log[F]
+            .warn(
+              s"Recording invalid block ${PrettyPrinter.buildString(block.blockHash)} for $offence."
+            ) >> {
+          if (isSlashable(offence))
+            handleInvalidBlockEffect(offence, block).map(_.some)
+          else none[BlockDagRepresentation[F]].pure[F]
+        }
+    }
   }
 }

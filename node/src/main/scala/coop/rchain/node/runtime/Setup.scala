@@ -10,12 +10,14 @@ import coop.rchain.blockstorage.casperbuffer.CasperBufferKeyValueStorage
 import coop.rchain.blockstorage.dag.BlockDagKeyValueStorage
 import coop.rchain.blockstorage.deploy.KeyValueDeployStorage
 import coop.rchain.blockstorage.finality.LastFinalizedKeyValueStorage
+import coop.rchain.blockstorage.state.CasperStateValidated
 import coop.rchain.casper._
 import coop.rchain.casper.api.BlockReportAPI
-import coop.rchain.casper.blocks.BlockProcessor
+import coop.rchain.casper.blocks.BlockMessageProcessor
 import coop.rchain.casper.blocks.proposer.{Proposer, ProposerResult}
 import coop.rchain.casper.engine.{BlockRetriever, CasperLaunch, EngineCell, Running}
 import coop.rchain.casper.protocol.BlockMessage
+import coop.rchain.casper.state.{CasperStateManager, CasperStateManagerImpl}
 import coop.rchain.casper.state.instances.{BlockStateManagerImpl, ProposerState}
 import coop.rchain.casper.storage.RNodeKeyValueStoreManager
 import coop.rchain.casper.storage.RNodeKeyValueStoreManager.legacyRSpacePathPrefix
@@ -45,6 +47,10 @@ import coop.rchain.rspace.syntax._
 import coop.rchain.shared._
 import fs2.concurrent.Queue
 import monix.execution.Scheduler
+import coop.rchain.blockstorage.syntax._
+import coop.rchain.casper.BlockStatus.Offence
+import coop.rchain.casper.engine.BlockRetriever.MissingDependencyRequested
+import coop.rchain.models.block.StateHash.StateHash
 
 import java.nio.file.Files
 
@@ -68,12 +74,11 @@ object Setup {
         WebApi[F],
         AdminWebApi[F],
         Option[Proposer[F]],
-        Queue[F, (Casper[F], Boolean, Deferred[F, ProposerResult])],
+        Queue[F, (CasperSnapshot[F], Casper[F], Boolean, Deferred[F, ProposerResult])],
         // TODO move towards having a single node state
         Option[Ref[F, ProposerState[F]]],
-        BlockProcessor[F],
-        Ref[F, Set[BlockHash]],
-        Queue[F, (Casper[F], BlockMessage)],
+        CasperStateManager[F],
+        Queue[F, BlockMessage],
         Option[ProposeFunction[F]]
     )
   ] =
@@ -177,22 +182,19 @@ object Setup {
           importer           <- historyRepo.importer
           rspaceStateManager = RSpaceStateManagerImpl(exporter, importer)
           blockStateManager  = BlockStateManagerImpl(blockStore, blockDagStorage)
-          rnodeStateManager  = RNodeStateManagerImpl(rspaceStateManager, blockStateManager)
-        } yield (rnodeStateManager, rspaceStateManager)
+          casperStateManager <- CasperStateManager(CasperShardConf.fromCasperConf(conf.casper))
+          rnodeStateManager = RNodeStateManagerImpl(
+            rspaceStateManager,
+            blockStateManager,
+            casperStateManager
+          )
+        } yield (rnodeStateManager, rspaceStateManager, casperStateManager)
       }
-      (rnodeStateManager, rspaceStateManager) = stateManagers
+      (rnodeStateManager, rspaceStateManager, casperStateManager) = stateManagers
 
       // Engine dynamic reference
-      engineCell          <- EngineCell.init[F]
-      envVars             = EnvVars.envVars[F]
-      blockProcessorQueue <- Queue.unbounded[F, (Casper[F], BlockMessage)]
-      // block processing state - set of items currently in processing
-      blockProcessorStateRef <- Ref.of(Set.empty[BlockHash])
-      blockProcessor = {
-        implicit val (bs, bd)     = (blockStore, blockDagStorage)
-        implicit val (br, cb, cu) = (blockRetriever, casperBufferStorage, commUtil)
-        BlockProcessor[F]
-      }
+      engineCell <- EngineCell.init[F]
+      envVars    = EnvVars.envVars[F]
 
       // Proposer instance
       validatorIdentityOpt <- ValidatorIdentity.fromPrivateKeyWithLogging[F](
@@ -209,24 +211,48 @@ object Setup {
           else PrivateKey(Base16.decode(dummyDeployerKeyOpt.get).get).some
 
         // TODO make term for dummy deploy configurable
-        Proposer[F](validatorIdentity, dummyDeployerKey.map((_, "Nil")))
+        Proposer[F](validatorIdentity, dummyDeployerKey.map((_, "Nil")), casperStateManager)
       }
 
       // Propose request is a tuple - Casper, async flag and deferred proposer result that will be resolved by proposer
-      proposerQueue <- Queue.unbounded[F, (Casper[F], Boolean, Deferred[F, ProposerResult])]
+      proposerQueue <- Queue.unbounded[
+                        F,
+                        (CasperSnapshot[F], Casper[F], Boolean, Deferred[F, ProposerResult])
+                      ]
 
       triggerProposeFOpt: Option[ProposeFunction[F]] = if (proposer.isDefined)
         Some(
-          (casper: Casper[F], isAsync: Boolean) =>
+          (snapshot: CasperSnapshot[F], casper: Casper[F], isAsync: Boolean) =>
             for {
               d <- Deferred[F, ProposerResult]
-              _ <- proposerQueue.enqueue1((casper, isAsync, d))
+              _ <- proposerQueue.enqueue1((snapshot, casper, isAsync, d))
               r <- d.get
             } yield r
         )
       else none[ProposeFunction[F]]
 
       proposerStateRefOpt <- triggerProposeFOpt.traverse(_ => Ref.of(ProposerState[F]()))
+
+      blockProcessorQueue <- Queue.unbounded[F, BlockMessage]
+      blockProcessor = {
+        implicit val (bs, bd, cbs) = (blockStore, blockDagStorage, casperBufferStorage)
+        implicit val (rm, es, sp)  = (runtimeManager, estimator, span)
+        val validateF = (b: BlockMessage, casperState: CasperStateValidated) =>
+          CasperSnapshot(b.some, casperState.some, CasperShardConf.fromCasperConf(conf.casper))
+            .flatMap(MultiParentCasperImpl.validate(b, _))
+
+        BlockMessageProcessor.apply(
+          casperStateManager,
+          Validate.formatOfFields,
+          blockStore.put,
+          blockStore.getUnsafe,
+          validateF,
+          ds =>
+            ds.toList
+              .traverse_(blockRetriever.admitHash(_, admitHashReason = MissingDependencyRequested)),
+          MultiParentCasperImpl.validatedEff[F]
+        )
+      }
 
       casperLaunch = {
         implicit val (bs, bd, ds)         = (blockStore, blockDagStorage, deployStorage)
@@ -237,17 +263,18 @@ object Setup {
         implicit val (rsm, sp)            = (rspaceStateManager, span)
         CasperLaunch.of[F](
           blockProcessorQueue,
-          blockProcessorStateRef,
           if (conf.autopropose) triggerProposeFOpt else none[ProposeFunction[F]],
           conf.casper,
           !conf.protocolClient.disableLfs,
-          conf.protocolServer.disableStateExporter
+          conf.protocolServer.disableStateExporter,
+          casperStateManager
         )
       }
       packetHandler = {
         implicit val ec = engineCell
-        CasperPacketHandler[F]
+        CasperPacketHandler[F](blockProcessorQueue)
       }
+
       // Bypass fair dispatcher
       /*packetHandler <- {
         implicit val ec = engineCell
@@ -336,7 +363,7 @@ object Setup {
       proposerQueue,
       proposerStateRefOpt,
       blockProcessor,
-      blockProcessorStateRef,
+      casperStateManager,
       blockProcessorQueue,
       triggerProposeFOpt
     )

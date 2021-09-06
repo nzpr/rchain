@@ -5,7 +5,7 @@ import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagRepresentation
-import coop.rchain.casper.InvalidBlock.InvalidRejectedDeploy
+import coop.rchain.casper.BlockStatus.{BlockException, InvalidRejectedDeploy}
 import coop.rchain.casper._
 import coop.rchain.casper.merging.{BlockIndex, DagMerger}
 import coop.rchain.casper.protocol._
@@ -61,7 +61,7 @@ object InterpreterUtil {
       _                   <- Log[F].info(s"Computed parents post state for ${PrettyPrinter.buildString(block)}.")
       result <- computedParentsInfo match {
                  case Left(ex) =>
-                   BlockStatus.exception(ex).asLeft[Option[StateHash]].pure
+                   BlockException(ex).asLeft[Option[StateHash]].pure
                  case Right((computedPreStateHash, rejectedDeploys @ _)) =>
                    val rejectedDeployIds = rejectedDeploys.toSet
                    if (incomingPreStateHash != computedPreStateHash) {
@@ -71,7 +71,7 @@ object InterpreterUtil {
                          s"Computed pre-state hash ${PrettyPrinter.buildString(computedPreStateHash)} does not equal block's pre-state hash ${PrettyPrinter
                            .buildString(incomingPreStateHash)}"
                        )
-                       .as(none[StateHash].asRight[BlockError])
+                       .as(none[StateHash].asRight[BlockException])
                    } else if (rejectedDeployIds != block.body.rejectedDeploys.map(_.sig).toSet) {
                      Log[F]
                        .warn(
@@ -80,7 +80,7 @@ object InterpreterUtil {
                            s"block's rejected deploy " +
                            s"${block.body.rejectedDeploys.map(_.sig).map(PrettyPrinter.buildString).mkString(",")}"
                        )
-                       .as(InvalidRejectedDeploy.asLeft)
+                       .as(none[StateHash].asRight[BlockException])
                    } else {
                      for {
                        replayResult <- replayBlock(
@@ -135,44 +135,41 @@ object InterpreterUtil {
       case Left(status) =>
         status match {
           case InternalError(throwable) =>
-            BlockStatus
-              .exception(
-                new Exception(
-                  s"Internal errors encountered while processing deploy: ${throwable.getMessage}"
-                )
+            BlockException(
+              new Exception(
+                s"Internal errors encountered while processing deploy: ${throwable.getMessage}"
               )
-              .asLeft[Option[StateHash]]
-              .pure
+            ).asLeft[Option[StateHash]].pure
           case ReplayStatusMismatch(replayFailed, initialFailed) =>
             Log[F]
               .warn(
                 s"Found replay status mismatch; replay failure is $replayFailed and orig failure is $initialFailed"
               )
-              .as(none[StateHash].asRight[BlockError])
+              .as(none[StateHash].asRight[BlockException])
           case UnusedCOMMEvent(replayException) =>
             Log[F]
               .warn(
                 s"Found replay exception: ${replayException.getMessage}"
               )
-              .as(none[StateHash].asRight[BlockError])
+              .as(none[StateHash].asRight[BlockException])
           case ReplayCostMismatch(initialCost, replayCost) =>
             Log[F]
               .warn(
                 s"Found replay cost mismatch: initial deploy cost = $initialCost, replay deploy cost = $replayCost"
               )
-              .as(none[StateHash].asRight[BlockError])
+              .as(none[StateHash].asRight[BlockException])
           // Restructure errors so that this case is unnecessary
           case SystemDeployErrorMismatch(playMsg, replayMsg) =>
             Log[F]
               .warn(
                 s"Found system deploy error mismatch: initial deploy error message = $playMsg, replay deploy error message = $replayMsg"
               )
-              .as(none[StateHash].asRight[BlockError])
+              .as(none[StateHash].asRight[BlockException])
         }
       case Right(computedStateHash) =>
         if (tsHash == computedStateHash) {
           // state hash in block matches computed hash!
-          computedStateHash.some.asRight[BlockError].pure
+          computedStateHash.some.asRight[BlockException].pure
         } else {
           // state hash in block does not match computed hash -- invalid!
           // return no state hash, do not update the state hash set
@@ -181,7 +178,7 @@ object InterpreterUtil {
               s"Tuplespace hash ${PrettyPrinter.buildString(tsHash)} does not match computed hash ${PrettyPrinter
                 .buildString(computedStateHash)}."
             )
-            .as(none[StateHash].asRight[BlockError])
+            .as(none[StateHash].asRight[BlockException])
         }
     }
 

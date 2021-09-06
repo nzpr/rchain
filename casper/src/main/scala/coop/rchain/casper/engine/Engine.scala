@@ -21,7 +21,7 @@ import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.casperbuffer.CasperBufferStorage
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.blockstorage.deploy.DeployStorage
-import coop.rchain.casper.state.RNodeStateManager
+import coop.rchain.casper.state.{CasperStateManager, RNodeStateManager}
 import coop.rchain.casper.util.comm.CommUtil
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.rspace.hashing.Blake2b256Hash
@@ -92,8 +92,7 @@ object Engine {
     /* Storage */     : BlockStore: BlockDagStorage: CasperBufferStorage: RSpaceStateManager
     /* Diagnostics */ : Log: EventLog: Metrics] // format: on
   (
-      blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-      blocksInProcessing: Ref[F, Set[BlockHash]],
+      casperStateManager: CasperStateManager[F],
       casper: MultiParentCasper[F],
       approvedBlock: ApprovedBlock,
       validatorId: Option[ValidatorIdentity],
@@ -109,8 +108,7 @@ object Engine {
             )
           )
       running = new Running[F](
-        blockProcessingQueue,
-        blocksInProcessing,
+        casperStateManager,
         casper,
         approvedBlock,
         validatorId,
@@ -132,8 +130,7 @@ object Engine {
     /* Storage */     : BlockStore: BlockDagStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
     /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
   (
-      blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-      blocksInProcessing: Ref[F, Set[BlockHash]],
+      casperStateManager: CasperStateManager[F],
       casperShardConf: CasperShardConf,
       validatorId: Option[ValidatorIdentity],
       init: F[Unit],
@@ -145,8 +142,7 @@ object Engine {
       stateResponseQueue <- Queue.bounded[F, StoreItemsMessage](50)
       _ <- EngineCell[F].set(
             new Initializing(
-              blockProcessingQueue,
-              blocksInProcessing,
+              casperStateManager,
               casperShardConf,
               validatorId,
               init,

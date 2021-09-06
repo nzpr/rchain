@@ -7,10 +7,10 @@ import cats.mtl._
 import cats.syntax.all._
 import cats.{~>, Parallel}
 import com.typesafe.config.Config
-import coop.rchain.casper.blocks.BlockProcessor
 import coop.rchain.casper.blocks.proposer.{Proposer, ProposerResult}
 import coop.rchain.casper.engine.BlockRetriever
 import coop.rchain.casper.protocol.BlockMessage
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.state.instances.ProposerState
 import coop.rchain.casper.util.comm._
 import coop.rchain.casper.{engine, _}
@@ -27,7 +27,7 @@ import coop.rchain.monix.Monixable
 import coop.rchain.node.api._
 import coop.rchain.node.configuration.NodeConf
 import coop.rchain.node.effects.{EventConsumer, RchainEvents}
-import coop.rchain.node.instances.{BlockProcessorInstance, ProposerInstance}
+import coop.rchain.node.instances.ProposerInstance
 import coop.rchain.node.runtime.NodeRuntime._
 import coop.rchain.node.web.ReportingRoutes.ReportingHttpRoutes
 import coop.rchain.node.{diagnostics, effects, NodeEnvironment}
@@ -35,7 +35,6 @@ import coop.rchain.p2p.effects._
 import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueStoreManager
-import coop.rchain.store.LmdbDirStoreManager.gb
 import fs2.concurrent.Queue
 import kamon._
 import monix.execution.Scheduler
@@ -169,8 +168,7 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
         proposerOpt,
         proposerQueue,
         proposerStateRefOpt,
-        blockProcessor,
-        blockProcessorState,
+        casperStateManager,
         blockProcessorQueue,
         triggerProposeF
       ) = result
@@ -203,8 +201,7 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
           proposerQueue,
           triggerProposeF,
           proposerStateRefOpt,
-          blockProcessor,
-          blockProcessorState,
+          casperStateManager,
           blockProcessorQueue
         )
       }
@@ -231,12 +228,14 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
       webApi: WebApi[F],
       adminWebApi: AdminWebApi[F],
       proposer: Option[Proposer[F]],
-      proposeRequestsQueue: Queue[F, (Casper[F], Boolean, Deferred[F, ProposerResult])],
+      proposeRequestsQueue: Queue[
+        F,
+        (CasperSnapshot[F], Casper[F], Boolean, Deferred[F, ProposerResult])
+      ],
       triggerProposeFOpt: Option[ProposeFunction[F]],
       proposerStateRefOpt: Option[Ref[F, ProposerState[F]]],
-      blockProcessor: BlockProcessor[F],
-      blockProcessingState: Ref[F, Set[BlockHash]],
-      incomingBlocksQueue: Queue[F, (Casper[F], BlockMessage)]
+      blockProcessingState: CasperStateManager[F],
+      incomingBlocksQueue: Queue[F, BlockMessage]
   )(
       implicit
       time: Time[F],
@@ -341,12 +340,6 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
       engineInitStream = fs2.Stream.eval(engineInit)
 
       casperLoopStream = fs2.Stream.eval(casperLoop).repeat
-      blockProcessorStream = BlockProcessorInstance.create(
-        incomingBlocksQueue,
-        blockProcessor,
-        blockProcessingState,
-        if (nodeConf.autopropose) triggerProposeFOpt else none[ProposeFunction[F]]
-      )
 
       proposerStream = if (proposer.isDefined)
         ProposerInstance
@@ -361,7 +354,7 @@ class NodeRuntime[F[_]: Monixable: ConcurrentEffect: Parallel: Timer: ContextShi
           servers.internalApiServer,
           servers.httpServer,
           servers.adminHttpServer,
-          blockProcessorStream,
+          incomingBlocksQueue.dequeue,
           proposerStream,
           engineInitStream,
           casperLoopStream,

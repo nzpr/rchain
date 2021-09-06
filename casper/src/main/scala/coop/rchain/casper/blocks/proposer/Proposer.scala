@@ -7,8 +7,10 @@ import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.blockstorage.deploy.DeployStorage
+import coop.rchain.casper.BlockStatus.Offence
 import coop.rchain.casper.engine.BlockRetriever
 import coop.rchain.casper.protocol.{BlockMessage, DeployData}
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.comm.CommUtil
 import coop.rchain.casper.util.rholang.RuntimeManager
@@ -50,7 +52,7 @@ class Proposer[F[_]: Concurrent: Log: Span](
         CasperSnapshot[F],
         ValidatorIdentity
     ) => F[BlockCreatorResult],
-    validateBlock: (Casper[F], CasperSnapshot[F], BlockMessage) => F[ValidBlockProcessing],
+    validateBlock: (Casper[F], CasperSnapshot[F], BlockMessage) => F[Option[Offence]],
     proposeEffect: (Casper[F], BlockMessage) => F[Unit],
     validator: ValidatorIdentity,
     loadDeploys: F[Set[Signed[DeployData]]]
@@ -82,10 +84,10 @@ class Proposer[F[_]: Concurrent: Log: Span](
                   r <- b match {
                         case Created(b) =>
                           validateBlock(casper, s, b).flatMap {
-                            case Right(v) =>
+                            case None =>
                               proposeEffect(casper, b) >>
-                                (ProposeResult.success(v), b.some).pure[F]
-                            case Left(v) =>
+                                (ProposeResult.success(b), b.some).pure[F]
+                            case Some(v) =>
                               Concurrent[F].raiseError[(ProposeResult, Option[BlockMessage])](
                                 new Throwable(
                                   s"Validation of self created block failed with reason: $v, cancelling propose."
@@ -121,6 +123,7 @@ class Proposer[F[_]: Concurrent: Log: Span](
     }
 
   def propose(
+      s: CasperSnapshot[F],
       c: Casper[F],
       isAsync: Boolean,
       proposeIdDef: Deferred[F, ProposerResult]
@@ -130,8 +133,6 @@ class Proposer[F[_]: Concurrent: Log: Span](
       cs.maxSeqNums.getOrElse(valBytes, 0) + 1
     }
     for {
-      // get snapshot to serve as a base for propose
-      s <- Stopwatch.time(Log[F].info(_))(s"getCasperSnapshot")(getCasperSnapshot(c))
       result <- if (isAsync) for {
                  nextSeq <- getValidatorNextSeqNumber(s).pure[F]
                  _       <- proposeIdDef.complete(ProposerResult.started(nextSeq))
@@ -169,9 +170,17 @@ object Proposer {
   ] // format: on
   (
       validatorIdentity: ValidatorIdentity,
-      dummyDeployOpt: Option[(PrivateKey, String)] = None
+      dummyDeployOpt: Option[(PrivateKey, String)] = None,
+      casperStateManager: CasperStateManager[F]
   )(implicit runtimeManager: RuntimeManager[F]): Proposer[F] = {
-    val getCasperSnapshot = (c: Casper[F]) => c.getSnapshot()
+    val getCasperSnapshot = (c: Casper[F]) =>
+      casperStateManager.getStateRef.get.flatMap { st =>
+        CasperSnapshot.apply(
+          none[BlockMessage],
+          st.validatedState.some,
+          casperStateManager.getShardConf
+        )
+      }
 
     val createBlock = (s: CasperSnapshot[F], validatorIdentity: ValidatorIdentity) =>
       BlockCreator.create(s, validatorIdentity, dummyDeployOpt)

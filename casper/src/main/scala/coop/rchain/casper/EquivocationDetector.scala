@@ -10,6 +10,12 @@ import coop.rchain.casper.protocol.{BlockMessage, Bond}
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.blockstorage.util.DoublyLinkedDag
+import coop.rchain.casper.BlockStatus.{
+  AdmissibleEquivocation,
+  IgnorableEquivocation,
+  NeglectedEquivocation,
+  Offence
+}
 import coop.rchain.casper.util.ProtoUtil._
 import coop.rchain.dag.DagOps
 import coop.rchain.models.BlockHash.BlockHash
@@ -26,16 +32,15 @@ object EquivocationDetector {
       blockBufferDependencyDag: DoublyLinkedDag[BlockHash],
       block: BlockMessage,
       dag: BlockDagRepresentation[F]
-  ): F[ValidBlockProcessing] =
+  ): F[Option[Offence]] =
     for {
       _                               <- Log[F].info("Calculate checkEquivocations.")
       maybeLatestMessageOfCreatorHash <- dag.latestMessageHash(block.sender)
       maybeCreatorJustification       = creatorJustificationHash(block)
       isNotEquivocation               = maybeCreatorJustification == maybeLatestMessageOfCreatorHash
-      result <- if (isNotEquivocation) {
-                 BlockStatus.valid.asRight[BlockError].pure[F]
-               } else if (requestedAsDependency(block, blockBufferDependencyDag)) {
-                 BlockStatus.admissibleEquivocation.asLeft[ValidBlock].pure[F]
+      result <- if (isNotEquivocation) none[Offence].pure[F]
+               else if (requestedAsDependency(block, blockBufferDependencyDag)) {
+                 Some(AdmissibleEquivocation).pure[F]
                } else {
                  for {
                    sender <- PrettyPrinter.buildString(block.sender).pure[F]
@@ -48,7 +53,7 @@ object EquivocationDetector {
                    _ <- Log[F].warn(
                          s"Ignorable equivocation: sender is $sender, creator justification is $creatorJustificationHash, latest message of creator is $latestMessageOfCreator"
                        )
-                 } yield BlockStatus.ignorableEquivocation.asLeft[ValidBlock]
+                 } yield Some(IgnorableEquivocation)
                }
     } yield result
 
@@ -66,27 +71,22 @@ object EquivocationDetector {
   // See summary of algorithm above
   def checkNeglectedEquivocationsWithUpdate[F[_]: Sync: Log: BlockStore: BlockDagStorage](
       block: BlockMessage,
-      dag: BlockDagRepresentation[F],
-      genesis: BlockMessage
-  ): F[ValidBlockProcessing] =
+      dag: BlockDagRepresentation[F]
+  ): F[Option[Offence]] =
     for {
       _ <- Log[F].info("Calculate checkNeglectedEquivocationsWithUpdate")
       neglectedEquivocationDetected <- isNeglectedEquivocationDetectedWithUpdate[F](
                                         block,
-                                        dag,
-                                        genesis
+                                        dag
                                       )
-      status = if (neglectedEquivocationDetected) {
-        BlockStatus.neglectedEquivocation.asLeft[ValidBlock]
-      } else {
-        BlockStatus.valid.asRight[BlockError]
-      }
+      status = if (neglectedEquivocationDetected) Some(NeglectedEquivocation)
+      else none[Offence]
+
     } yield status
 
   private def isNeglectedEquivocationDetectedWithUpdate[F[_]: Sync: BlockStore: BlockDagStorage](
       block: BlockMessage,
-      dag: BlockDagRepresentation[F],
-      genesis: BlockMessage
+      dag: BlockDagRepresentation[F]
   ): F[Boolean] =
     BlockDagStorage[F].accessEquivocationsTracker { equivocationsTracker =>
       for {
@@ -96,7 +96,6 @@ object EquivocationDetector {
                                             block,
                                             dag,
                                             equivocationRecord,
-                                            genesis,
                                             equivocationsTracker
                                           )
                                         }
@@ -113,15 +112,13 @@ object EquivocationDetector {
       block: BlockMessage,
       dag: BlockDagRepresentation[F],
       equivocationRecord: EquivocationRecord,
-      genesis: BlockMessage,
       equivocationsTracker: EquivocationsTracker[F]
   ): F[Boolean] =
     for {
       equivocationDiscoveryStatus <- getEquivocationDiscoveryStatus[F](
                                       block,
                                       dag,
-                                      equivocationRecord,
-                                      genesis
+                                      equivocationRecord
                                     )
       neglectedEquivocationDetected = equivocationDiscoveryStatus match {
         case EquivocationNeglected =>
@@ -142,8 +139,7 @@ object EquivocationDetector {
   private def getEquivocationDiscoveryStatus[F[_]: Sync: BlockStore](
       block: BlockMessage,
       dag: BlockDagRepresentation[F],
-      equivocationRecord: EquivocationRecord,
-      genesis: BlockMessage
+      equivocationRecord: EquivocationRecord
   ): F[EquivocationDiscoveryStatus] = {
     val equivocatingValidator = equivocationRecord.equivocator
     val latestMessages        = toLatestMessageHashes(block.justifications)
@@ -155,8 +151,7 @@ object EquivocationDetector {
           dag,
           equivocationRecord,
           latestMessages,
-          stake,
-          genesis
+          stake
         )
       case None =>
         /*
@@ -172,8 +167,7 @@ object EquivocationDetector {
       blockDag: BlockDagRepresentation[F],
       equivocationRecord: EquivocationRecord,
       latestMessages: Map[Validator, BlockHash],
-      stake: Long,
-      genesis: BlockMessage
+      stake: Long
   ): F[EquivocationDiscoveryStatus] =
     if (stake > 0L) {
       for {
@@ -181,8 +175,7 @@ object EquivocationDetector {
                                    blockDag,
                                    latestMessages.toSeq,
                                    equivocationRecord,
-                                   Set.empty[BlockMessage],
-                                   genesis
+                                   Set.empty[BlockMessage]
                                  )
       } yield
         if (equivocationDetectable) {
@@ -199,8 +192,7 @@ object EquivocationDetector {
       blockDag: BlockDagRepresentation[F],
       latestMessages: Seq[(Validator, BlockHash)],
       equivocationRecord: EquivocationRecord,
-      equivocationChildren: Set[BlockMessage],
-      genesis: BlockMessage
+      equivocationChildren: Set[BlockMessage]
   ): F[Boolean] =
     latestMessages match {
       case Nil => false.pure[F]
@@ -210,8 +202,7 @@ object EquivocationDetector {
           justificationBlockHash,
           equivocationRecord,
           equivocationChildren,
-          remainder,
-          genesis
+          remainder
         )
     }
 
@@ -220,8 +211,7 @@ object EquivocationDetector {
       justificationBlockHash: BlockHash,
       equivocationRecord: EquivocationRecord,
       equivocationChildren: Set[BlockMessage],
-      remainder: Seq[(Validator, BlockHash)],
-      genesis: BlockMessage
+      remainder: Seq[(Validator, BlockHash)]
   ): F[Boolean] =
     if (equivocationRecord.equivocationDetectedBlockHashes.contains(justificationBlockHash)) {
       true.pure[F]
@@ -233,8 +223,7 @@ object EquivocationDetector {
                                  equivocationRecord,
                                  equivocationChildren,
                                  remainder,
-                                 justificationBlock,
-                                 genesis
+                                 justificationBlock
                                )
       } yield equivocationDetected
     }
@@ -244,8 +233,7 @@ object EquivocationDetector {
       equivocationRecord: EquivocationRecord,
       equivocationChildren: Set[BlockMessage],
       remainder: Seq[(Validator, BlockHash)],
-      justificationBlock: BlockMessage,
-      genesis: BlockMessage
+      justificationBlock: BlockMessage
   ): F[Boolean] = {
     val equivocatingValidator = equivocationRecord.equivocator
     val equivocationBaseBlockSeqNum =
@@ -256,8 +244,7 @@ object EquivocationDetector {
                                       justificationBlock,
                                       equivocatingValidator,
                                       equivocationBaseBlockSeqNum,
-                                      equivocationChildren,
-                                      genesis
+                                      equivocationChildren
                                     )
       equivocationDetected <- if (updatedEquivocationChildren.size > 1) {
                                true.pure[F]
@@ -266,8 +253,7 @@ object EquivocationDetector {
                                  blockDag,
                                  remainder,
                                  equivocationRecord,
-                                 updatedEquivocationChildren,
-                                 genesis
+                                 updatedEquivocationChildren
                                )
                              }
     } yield equivocationDetected
@@ -279,11 +265,12 @@ object EquivocationDetector {
       justificationBlock: BlockMessage,
       equivocatingValidator: Validator,
       equivocationBaseBlockSeqNum: SequenceNumber,
-      equivocationChildren: Set[BlockMessage],
-      genesis: BlockMessage
+      equivocationChildren: Set[BlockMessage]
   ): F[Set[BlockMessage]] =
     // TODO: Is this a safe check? Or should I just check block hash?
-    if (justificationBlock == genesis) {
+    if (blockDag.getPureState.lastFinalizedBlock
+          .map { case (h, _) => h }
+          .contains(justificationBlock.blockHash)) {
       equivocationChildren.pure[F]
     } else if (justificationBlock.sender == equivocatingValidator) {
       // This is a special case as the justificationBlock might be the equivocation child

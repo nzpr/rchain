@@ -119,6 +119,8 @@ object Finalizer {
 
         nextF.map(next => (out, next.nonEmpty.guard[Option].as(next)))
       }
+      // pass higher messages first
+      .map(_.sortBy(_._2.blockNum).reverse)
       .evalMap(_.traverse {
         // map visits to message agreements: validator v agrees on message m
         case (v, m) =>

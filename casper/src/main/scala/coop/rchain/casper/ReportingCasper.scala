@@ -94,7 +94,7 @@ object ReportingCasper {
         for {
           reportingRspace  <- ReportingRuntime.createReportingRSpace(rspaceStore)
           reportingRuntime <- ReportingRuntime.createReportingRuntime(reportingRspace)
-          dag              <- BlockDagStorage[F].getRepresentation
+          dag              <- BlockDagStorage[F].getRepresentation()
           // TODO approvedBlock is not equal to genesisBlock
           genesis          <- BlockStore[F].getApprovedBlock
           isGenesis        = genesis.exists(a => block.blockHash == a.candidate.block.blockHash)

@@ -12,6 +12,7 @@ import coop.rchain.casper.LastApprovedBlock.LastApprovedBlock
 import coop.rchain.casper._
 import coop.rchain.casper.engine.EngineCell._
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.state.CasperStateManager
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.comm.CommUtil
 import coop.rchain.casper.util.rholang.RuntimeManager
@@ -55,8 +56,7 @@ object GenesisCeremonyMaster {
     /* Storage */     : BlockStore: BlockDagStorage: DeployStorage: CasperBufferStorage: RSpaceStateManager
     /* Diagnostics */ : Log: EventLog: Metrics: Span] // format: on
   (
-      blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-      blocksInProcessing: Ref[F, Set[BlockHash]],
+      casperStateManager: CasperStateManager[F],
       casperShardConf: CasperShardConf,
       validatorId: Option[ValidatorIdentity],
       disableStateExporter: Boolean
@@ -68,8 +68,7 @@ object GenesisCeremonyMaster {
       cont <- lastApprovedBlockO match {
                case None =>
                  waitingForApprovedBlockLoop[F](
-                   blockProcessingQueue: Queue[F, (Casper[F], BlockMessage)],
-                   blocksInProcessing: Ref[F, Set[BlockHash]],
+                   casperStateManager,
                    casperShardConf,
                    validatorId,
                    disableStateExporter
@@ -82,12 +81,12 @@ object GenesisCeremonyMaster {
                               .hashSetCasper[F](
                                 validatorId,
                                 casperShardConf: CasperShardConf,
-                                ab
+                                ab,
+                                casperStateManager
                               )
                    _ <- Engine
                          .transitionToRunning[F](
-                           blockProcessingQueue,
-                           blocksInProcessing,
+                           casperStateManager,
                            casper,
                            approvedBlock,
                            validatorId,

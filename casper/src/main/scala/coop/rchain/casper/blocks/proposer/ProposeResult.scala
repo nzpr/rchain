@@ -3,16 +3,15 @@ package coop.rchain.casper.blocks.proposer
 import java.util.UUID
 
 import cats.Show
-import coop.rchain.casper.ValidBlock
 import coop.rchain.casper.protocol.BlockMessage
 
 final case class ProposeResult(proposeStatus: ProposeStatus)
 
 sealed trait ProposeStatus
-final case class ProposeSuccess(result: ValidBlock) extends ProposeStatus
-sealed trait ProposeFailure                         extends ProposeStatus
-case object InternalDeployError                     extends ProposeFailure
-case object BugError                                extends ProposeFailure
+final case class ProposeSuccess(result: BlockMessage) extends ProposeStatus
+sealed trait ProposeFailure                           extends ProposeStatus
+case object InternalDeployError                       extends ProposeFailure
+case object BugError                                  extends ProposeFailure
 
 sealed trait CheckProposeConstraintsResult
 case object CheckProposeConstraintsSuccess extends CheckProposeConstraintsResult
@@ -52,7 +51,7 @@ object ProposeResult {
   def notBonded: ProposeResult                       = ProposeResult(NotBonded)
   def notEnoughBlocks: ProposeResult                 = ProposeResult(NotEnoughNewBlocks)
   def tooFarAheadOfLastFinalized: ProposeResult      = ProposeResult(TooFarAheadOfLastFinalized)
-  def success(status: ValidBlock): ProposeResult     = ProposeResult(ProposeSuccess(status))
+  def success(status: BlockMessage): ProposeResult   = ProposeResult(ProposeSuccess(status))
   def failure(status: ProposeFailure): ProposeResult = ProposeResult(status)
 }
 

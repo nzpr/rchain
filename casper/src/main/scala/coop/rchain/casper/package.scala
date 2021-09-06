@@ -1,5 +1,6 @@
 package coop.rchain
 
+import coop.rchain.casper.BlockStatus.{BlockException, Validated}
 import coop.rchain.casper.blocks.proposer.ProposerResult
 import coop.rchain.casper.util.comm.CommUtilSyntax
 import coop.rchain.metrics.Metrics
@@ -8,10 +9,11 @@ import coop.rchain.casper.util.rholang.RhoRuntimeSyntax
 
 package object casper {
   type TopoSort             = Vector[Vector[BlockHash]]
-  type BlockProcessing[A]   = Either[BlockError, A]
-  type ValidBlockProcessing = BlockProcessing[ValidBlock]
+  type BlockProcessing[A]   = Either[BlockException, A]
+  type ValidBlockProcessing = BlockProcessing[Validated]
 
-  type ProposeFunction[F[_]] = (Casper[F], Boolean) => F[ProposerResult]
+  type ProposeFunction[F[_]] = (CasperSnapshot[F], Casper[F], Boolean) => F[ProposerResult]
+  type AsyncProposeF[F[_]]   = (CasperSnapshot[F], Casper[F]) => F[ProposerResult]
 
   val CasperMetricsSource: Metrics.Source = Metrics.Source(Metrics.BaseSource, "casper")
 
