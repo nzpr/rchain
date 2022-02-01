@@ -12,10 +12,16 @@ final case class BlockMetadata(
     justifications: List[Justification],
     weightMap: Map[ByteString, Long],
     blockNum: Long,
-    seqNum: Int,
+    seqNum: Long,
     invalid: Boolean,
     baseFringeNum: Long
 ) {
+  override def equals(obj: Any): Boolean = obj match {
+    case that: BlockMetadata => that.blockHash == this.blockHash
+    case _                   => false
+  }
+  override def hashCode(): Int = blockHash.hashCode()
+
   def toByteString = BlockMetadata.typeMapper.toBase(this).toByteString
 }
 

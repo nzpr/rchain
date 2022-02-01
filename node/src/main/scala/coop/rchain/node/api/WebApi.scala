@@ -231,7 +231,7 @@ object WebApi {
 
   final case class PrepareResponse(
       names: List[String],
-      seqNumber: Int
+      seqNumber: Long
   )
 
   final case class ApiStatus(
