@@ -7,7 +7,7 @@ import cats.{Applicative, Foldable, Monad}
 import coop.rchain.casper.api.GraphzGenerator.{DagInfo, ValidatorsBlocks}
 import coop.rchain.casper.api.ValidatorBlock
 import coop.rchain.graphz._
-import coop.rchain.sdk.simulation.data.Finalization02._
+import coop.rchain.casper.pCasper.sim.Simulation._
 import monix.eval.Task
 import org.scalatest.{FlatSpec, Matchers}
 
@@ -77,7 +77,7 @@ class FinalizationSpec extends FlatSpec with Matchers {
       nets.traverse {
         case (net, name) =>
           for {
-            net1_     <- runSections(net, List((1, .0f)), s"main1-$name")
+            net1_ <- runSections(net, List((1, .0f)), s"main1-$name")
 //            net1_     <- runSections(net, List((1, .4f)), s"main1-$name")
             (net1, _) = net1_
 

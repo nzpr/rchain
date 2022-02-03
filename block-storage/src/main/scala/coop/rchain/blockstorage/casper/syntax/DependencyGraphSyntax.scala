@@ -1,17 +1,16 @@
 package coop.rchain.blockstorage.casper.syntax
 
-import cats.{Monoid, Show}
+import cats.Show
 import cats.effect.{Concurrent, Sync}
 import cats.syntax.all._
-import coop.rchain.shared.syntax._
 import coop.rchain.blockstorage.casper.DependencyGraph.{
   zipStreamList,
   CommonMessage,
   NoCommonMessage
 }
 import coop.rchain.blockstorage.casper.SafetyOracle2.Agreement
-import coop.rchain.casper.pCasper.{combine, isFinal, Finalizer}
-import coop.rchain.blockstorage.casper.{SimpleProtocol1, _}
+import coop.rchain.blockstorage.casper._
+import coop.rchain.casper.pCasper.{Finalizer, Fringe}
 import coop.rchain.shared.Log
 import fs2.{Chunk, Stream}
 
@@ -67,7 +66,7 @@ final class DependencyGraphOps[F[_], M, S](val dg: DependencyGraph[F, M, S]) ext
       _ <- log.info(s"new FF candidate: ${fringe.map { case (_, m) => m.show }}")
 //      fringe = fringeCandidate.collect { case (s, Some(v)) => (s, v) }
       // fringes that are smaller then supermajority should not be considered, as they cannot match the criteria so no reason to spend compute.
-      safe = fringe.nonEmpty && !isFinal(fringe)(fullBondsMap)
+      safe = fringe.nonEmpty && !Fringe.isFinal(fringe)(fullBondsMap)
 //      safe <- (fullBondsMap.keySet == fringe.keySet)
 //               .pure[F] //||^ SimpleProtocol1.isPartition(fringeCandidate, dg.children, dg.sender)
       //      _ <- log
