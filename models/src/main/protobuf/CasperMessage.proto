@@ -125,6 +125,12 @@ message BlockMetadataInternal {
   bool invalid                          = 8; // whether the block was marked as invalid
   bytes postStateHash                    = 11;// whether the block is finalized
   int64 baseFringeNum = 10;
+  repeated FringeItemProto finalView                   = 12 [(scalapb.field).collection_type="collection.immutable.List"];
+}
+
+message FringeItemProto {
+  bytes validator = 1;
+  bytes hash     = 2;
 }
 
 message HeaderProto {

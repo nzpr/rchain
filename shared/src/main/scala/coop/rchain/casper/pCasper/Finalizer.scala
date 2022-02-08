@@ -2,6 +2,7 @@ package coop.rchain.casper.pCasper
 import cats.effect.Sync
 import cats.syntax.all._
 import coop.rchain.casper.pCasper.Fringe.Fringe
+import coop.rchain.casper.pCasper.PCasper.FinalityDecision
 
 /**
   * Finalizer searches for the next fringe that can be finalizer (maybe provisionally).
@@ -10,11 +11,11 @@ import coop.rchain.casper.pCasper.Fringe.Fringe
   */
 final case class Finalizer[F[_]: Sync, M, S](view: Map[S, M], curFringe: Fringe[M, S]) {
 
-  /** Outputs the fringe that can be finalized. If fringe is not final, it is a provisional finalization. */
+  /** Find messages above current fringe that can be finalized as part of some partition. */
   def run(
       witnessesF: M => F[Map[S, M]],     // lowest messages from all senders that have input in the view
       justificationsF: M => F[Map[S, M]] // justifications of the message
-  )(seqNum: M => Long, sender: M => S): F[Option[Fringe[M, S]]] = {
+  )(seqNum: M => Long, sender: M => S): F[Map[S, FinalityDecision[M, S]]] = {
 
     // Witnesses that are in the view
     val witnessesInViewF = witnessesF(_: M).map(_.filter {
@@ -43,20 +44,7 @@ final case class Finalizer[F[_]: Sync, M, S](view: Map[S, M], curFringe: Fringe[
           result.map { case ((_, message), _) => message }.distinct.size == result.size,
           s"Finalizer should output only unique messages but result is: \n $result."
         )
-        assert(
-          result.map { case ((_, _), partition) => partition }.distinct.size <= 1,
-          s"Finalizer output messages have to belong to a single partition but result is: \n $result"
-        )
-        assert(
-          result.headOption.forall {
-            case (_, partition) =>
-              val safeSenders = result.map { case ((sender, _), _) => sender }.toSet
-              safeSenders == partition
-          },
-          s"There have exactly one safe message for each sender in a partition but result is: \n $result"
-        )
-        val r = result.map(_._1).toMap
-        if (r.isEmpty) none[Fringe[M, S]] else r.some
+        result.map { case ((s, m), partition) => (s, FinalityDecision(m, partition)) }.toMap
       }
   }
 }

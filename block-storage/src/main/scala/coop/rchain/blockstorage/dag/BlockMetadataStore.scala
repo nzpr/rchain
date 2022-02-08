@@ -10,7 +10,7 @@ import com.google.protobuf.ByteString
 import coop.rchain.blockstorage.dag.BlockDagStorage.DagFringe
 import coop.rchain.casper.PrettyPrinter
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.BlockMetadata
+import coop.rchain.models.{BlockHash, BlockMetadata}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.shared.syntax._
@@ -24,7 +24,8 @@ import scala.collection.mutable
 object BlockMetadataStore {
   def apply[F[_]: Concurrent: Log](
       blockMetadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata],
-      latestFringesStore: KeyValueTypedStore[F, Long, DagFringe]
+      latestFringesStore: KeyValueTypedStore[F, Long, DagFringe],
+      finalityViewsStore: KeyValueTypedStore[F, Validator, Long]
   ): F[BlockMetadataStore[F]] =
     for {
       _ <- Log[F].info("Building in-memory blockMetadataStore.")
@@ -33,12 +34,14 @@ object BlockMetadataStore {
                        case (hash, metaData) =>
                          (hash, blockMetadataToInfo(metaData()))
                      }
-      _        <- Log[F].info("Reading data from blockMetadataStore done.")
-      dagState = recreateInMemoryState(blockInfoMap.toMap)
-      _        <- Log[F].info("Successfully built in-memory blockMetadataStore.")
-      fringes  <- latestFringesStore.toMap
-      ds       = dagState.copy(fringesMap = SortedMap[Long, DagFringe]() ++ fringes.toList)
-      cache    <- Ref.of[F, Map[BlockHash, Deferred[F, Option[BlockMetadata]]]](Map())
+      _             <- Log[F].info("Reading data from blockMetadataStore done.")
+      dagState      = recreateInMemoryState(blockInfoMap.toMap)
+      _             <- Log[F].info("Successfully built in-memory blockMetadataStore.")
+      fringes       <- latestFringesStore.toMap
+      ds1           = dagState.copy(fringesMap = SortedMap[Long, DagFringe]() ++ fringes.toList)
+      finalityViews <- finalityViewsStore.toMap
+      ds            = ds1.copy(finalityViewMap = finalityViews)
+      cache         <- Ref.of[F, Map[BlockHash, Deferred[F, Option[BlockMetadata]]]](Map())
     } yield new BlockMetadataStore[F](
       blockMetadataStore,
       cache,
@@ -52,10 +55,11 @@ object BlockMetadataStore {
       childMap: Map[BlockHash, Map[Validator, Vector[BlockHash]]],
       witnessMap: Map[BlockHash, Map[Validator, BlockHash]],
       jsMap: Map[BlockHash, Set[BlockHash]],
-      sendersMap: Map[BlockHash, Validator],
+      ValidatorsMap: Map[BlockHash, Validator],
       heightMap: SortedMap[Long, Set[BlockHash]],
       finalizedBlockSet: Set[BlockHash],
-      fringesMap: SortedMap[Long, DagFringe]
+      fringesMap: SortedMap[Long, DagFringe],
+      finalityViewMap: Map[Validator, Long]
   )
 
   def blockMetadataToInfo(blockMeta: BlockMetadata): BlockInfo =
@@ -85,8 +89,16 @@ object BlockMetadataStore {
         _ <- store.put(block.blockHash, block)
       } yield ()
 
-    def addFringe(fringe: DagFringe): F[Unit] = dagState.modify { st =>
-      st.copy(fringesMap = st.fringesMap.updated(fringe.num, fringe))
+    def addFringe(fringe: DagFringe, sender: Validator): F[Unit] = dagState.modify { st =>
+//      val fringeNum = fringe.num
+//      assert(
+//        st.fringesMap.get(fringeNum).forall(_ == fringe),
+//        "Diverging finalization for different senders is detected."
+//      )
+      st.copy(
+        fringesMap = st.fringesMap.updated(fringe.num, fringe),
+        finalityViewMap = st.finalityViewMap.updated(sender, fringe.num)
+      )
     }
 
     import coop.rchain.shared.Caching._
@@ -100,9 +112,9 @@ object BlockMetadataStore {
         enclosing: sourcecode.Enclosing
     ): F[BlockMetadata] = {
       def source = s"${file.value}:${line.value} ${enclosing.value}"
-      def errMsg =
+      def errBlockHash =
         s"BlockMetadataStore is missing key ${PrettyPrinter.buildString(hash)}\n  $source"
-      get(hash) >>= (_.liftTo(BlockMetadataStoreInconsistencyError(errMsg)))
+      get(hash) >>= (_.liftTo(BlockMetadataStoreInconsistencyError(errBlockHash)))
     }
 
     // DAG state operations
@@ -110,6 +122,8 @@ object BlockMetadataStore {
     def dagSet: F[Set[BlockHash]] = dagState.get.map(_.dagSet)
 
     def fringesMap: F[SortedMap[Long, DagFringe]] = dagState.get.map(_.fringesMap)
+
+    def finalityMap: F[Map[Validator, Long]] = dagState.get.map(_.finalityViewMap)
 
     def contains(hash: BlockHash): F[Boolean] = dagState.get.map(_.dagSet.contains(hash))
 
@@ -128,15 +142,15 @@ object BlockMetadataStore {
     val newDagSet = state.dagSet + block.hash
 
     // Update children relation map
-    val newChildren = block.justifications.map((_, Map(block.sender -> block.hash))) +
+    val newChildren = block.justifications.map((_, Map(block.Validator -> block.hash))) +
       ((block.hash, Map()))
     val newChildMap = newChildren.foldLeft(state.childMap) {
       case (acc, (key, newChildMap)) =>
         val curChildren = acc.getOrElse(key, Map.empty[Validator, Vector[BlockHash]])
         val newChildren = newChildMap.headOption
           .map {
-            case (sender, child) =>
-              curChildren.updated(sender, curChildren.getOrElse(sender, Vector()) :+ child)
+            case (s, child) =>
+              curChildren.updated(s, curChildren.getOrElse(s, Vector()) :+ child)
           }
           .getOrElse(curChildren)
         acc.updated(key, newChildren)
@@ -148,40 +162,61 @@ object BlockMetadataStore {
       state.heightMap.updated(block.blockNum, currSet + block.hash)
     } else state.heightMap
 
-    val witnessingSender = block.sender
+    val witnessingValidator = block.Validator
     def addWit(
-        acc1: Map[BlockHash, Map[Validator, BlockHash]],
-        m: BlockHash
+        witMap: Map[BlockHash, Map[Validator, BlockHash]],
+        js: BlockHash
     ): Map[BlockHash, Map[Validator, BlockHash]] = {
-      val newVal = acc1.updated(m, acc1.getOrElse(m, Map()) + (witnessingSender -> block.hash))
-      val selfJsOpt =
-        state.jsMap.getOrElse(m, Set()).find(j => state.sendersMap(j) == state.sendersMap(m))
-      selfJsOpt
-        .map { selfJs =>
-          if (state.witnessMap.getOrElse(selfJs, Map()).contains(witnessingSender))
-            newVal
-          else
-            addWit(acc1, selfJs)
-        }
-        .getOrElse(newVal)
+      val curVal = witMap.getOrElse(js, Map())
+      curVal
+        .get(witnessingValidator) // if there is already witness for Validator, stop recursion, return
+        .map(_ => witMap)
+        .getOrElse { // otherwise record witness and proceed with self child
+          val recorded = witMap.updated(js, curVal + (witnessingValidator -> block.hash))
+          val selfJsOpt =
+            state.jsMap(js).find(j => state.ValidatorsMap(j) == state.ValidatorsMap(js))
+          selfJsOpt.map { addWit(recorded, _) }.getOrElse(recorded)
+        } // otherwise record
     }
-    val newWitnessMap = block.justifications.foldLeft(
-      state.witnessMap.updated(block.hash, Map.empty[Validator, BlockHash])
-    ) {
-      case (acc, js) =>
-        if (state.witnessMap.getOrElse(js, Map()).contains(witnessingSender))
-          acc
-        else
-          addWit(acc, js)
-    }
+    val newWitnessMap =
+      block.justifications.foldLeft(
+        state.witnessMap.updated(block.hash, Map.empty[Validator, BlockHash])
+      )(addWit)
+
+//
+//    def addWit(
+//        acc1: Map[BlockHash, Map[Validator, BlockHash]],
+//        m: BlockHash
+//    ): Map[BlockHash, Map[Validator, BlockHash]] = {
+//      val newVal = acc1.updated(m, acc1.getOrElse(m, Map()) + (witnessingValidator -> block.hash))
+//      val selfJsOpt =
+//        state.jsMap.getOrElse(m, Set()).find(j => state.ValidatorsMap(j) == state.ValidatorsMap(m))
+//      selfJsOpt
+//        .map { selfJs =>
+//          if (state.witnessMap.getOrElse(selfJs, Map()).contains(witnessingValidator))
+//            newVal
+//          else
+//            addWit(acc1, selfJs)
+//        }
+//        .getOrElse(newVal)
+//    }
+//    val newWitnessMap = block.justifications.foldLeft(
+//      state.witnessMap.updated(block.hash, Map.empty[Validator, BlockHash])
+//    ) {
+//      case (acc, js) =>
+//        if (state.witnessMap.getOrElse(js, Map()).contains(witnessingValidator))
+//          acc
+//        else
+//          addWit(acc, js)
+//    }
 
     state.copy(
       dagSet = newDagSet,
       childMap = newChildMap,
       witnessMap = newWitnessMap,
       heightMap = newHeightMap,
-      sendersMap = state.sendersMap + (block.hash -> block.sender),
-      jsMap = state.jsMap + (block.hash           -> block.justifications)
+      ValidatorsMap = state.ValidatorsMap + (block.hash -> block.Validator),
+      jsMap = state.jsMap + (block.hash                 -> block.justifications)
     )
   }
 
@@ -196,7 +231,7 @@ object BlockMetadataStore {
   // Used to project part of the block metadata for in-memory initialization
   final case class BlockInfo(
       hash: BlockHash,
-      sender: Validator,
+      Validator: Validator,
       justifications: Set[BlockHash],
       blockNum: Long,
       isInvalid: Boolean
@@ -212,13 +247,14 @@ object BlockMetadataStore {
         witnessMap = Map(),
         jsMap = blocksInfoMap.mapValues(_.justifications),
         heightMap = SortedMap(),
-        sendersMap = blocksInfoMap.mapValues(_.sender),
+        ValidatorsMap = blocksInfoMap.mapValues(_.Validator),
         finalizedBlockSet = Set(),
-        fringesMap = SortedMap()
+        fringesMap = SortedMap(),
+        finalityViewMap = Map()
       )
 
     // Add blocks to DAG state
-    val dagState = blocksInfoMap.foldLeft(emptyState) {
+    val dagState = blocksInfoMap.toList.sortBy(_._2.blockNum).foldLeft(emptyState) {
       case (state, (_, block)) => addBlockToDagState(block)(state)
     }
 

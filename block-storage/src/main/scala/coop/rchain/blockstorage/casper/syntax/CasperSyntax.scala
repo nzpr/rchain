@@ -22,41 +22,41 @@ final class CasperOps[F[_], M, S](val c: Casper[F, M, S]) extends AnyVal {
     * Update finalization.
     * @return List of new finalization fringes found + conflict scope that should be merged into current finalized state.
     */
-  def finalise(
-      latestMessages: List[(S, M)],
-      dag: DependencyGraph[F, M, S],
-      safetyOracle: SafetyOracle2[F, M, S],
-      currLatestFringe: FinalizationFringe[S, M],
-      computedCoveringsMap: mutable.TreeMap[S, Set[M]]
-  )(
-      implicit c: Concurrent[F],
-      log: Log[F],
-//      shows: Show[S],
-      show: Show[M]
-  ): F[Vector[(FinalizationFringe[S, M], List[M])]] =
-    fs2.Stream
-      .unfoldEval((currLatestFringe.toMap.mapValues(_.head), List.empty[M])) {
-        case (ff, _) =>
-          val work = dag
-            .nextFF(
-              latestMessages.toMap,
-              ff,
-              safetyOracle.bondsMap(currLatestFringe.head._2.head),
-              computedCoveringsMap
-            )
-            .map(_.map { v =>
-              computedCoveringsMap.clear()
-              (v, v)
-            })
-          for {
-            r         <- Stopwatch.duration(work)
-            (v, time) = r
-            _         <- log.info(s"Finalization attempt done in $time")
-          } yield v
-      }
-      .map { case (ff, extraMerge) => (ff.toList.map { case (s, v) => (s, Set(v)) }, extraMerge) }
-      .compile
-      .toVector
+//  def finalise(
+//      latestMessages: List[(S, M)],
+//      dag: DependencyGraph[F, M, S],
+//      safetyOracle: SafetyOracle2[F, M, S],
+//      currLatestFringe: FinalizationFringe[S, M],
+//      computedCoveringsMap: mutable.TreeMap[S, Set[M]]
+//  )(
+//      implicit c: Concurrent[F],
+//      log: Log[F],
+////      shows: Show[S],
+//      show: Show[M]
+//  ): F[Vector[(FinalizationFringe[S, M], List[M])]] =
+//    fs2.Stream
+//      .unfoldEval((currLatestFringe.toMap.mapValues(_.head), List.empty[M])) {
+//        case (ff, _) =>
+//          val work = dag
+//            .nextFF(
+//              latestMessages.toMap,
+//              ff,
+//              safetyOracle.bondsMap(currLatestFringe.head._2.head),
+//              computedCoveringsMap
+//            )
+//            .map(_.map { v =>
+//              computedCoveringsMap.clear()
+//              (v, v)
+//            })
+//          for {
+//            r         <- Stopwatch.duration(work)
+//            (v, time) = r
+//            _         <- log.info(s"Finalization attempt done in $time")
+//          } yield v
+//      }
+//      .map { case (ff, extraMerge) => (ff.toList.map { case (s, v) => (s, Set(v)) }, extraMerge) }
+//      .compile
+//      .toVector
 //    // Slice is complete when all messages in a slice have enough stake (are below supermajority fringe)
 //    def fringeIsComplete(
 //        fringe: FinalizationFringe[S, M],

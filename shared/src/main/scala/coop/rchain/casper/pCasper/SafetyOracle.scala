@@ -2,6 +2,14 @@ package coop.rchain.casper.pCasper
 import cats.Monad
 import cats.syntax.all._
 
+/**
+  * Safety Oracle defines whether message should be finalized against some partition.
+  * It outputs a partition of senders inside which message is safe.
+  * If/when message is declared as a safe against a partition, it is safe to merge message into provisional state,
+  * rejecting conflicts with already provisioned body of a partition.
+  *
+  * IMPORTANT: once message safe against supermajority partition is found, after merging this is the new final state.
+  */
 object SafetyOracle {
 
   /**
@@ -32,8 +40,9 @@ object SafetyOracle {
       // consisting of senders that witness the message.
       lvl1 <- witnessesF(m).map(_.valuesIterator.toList)
       lvl2 <- nextLvl(lvl1)
-      isSafe = (lvl1, lvl2).tailRecM {
-        case (l1, l2) =>
+      isSafe = (lvl1, lvl2, 0).tailRecM {
+        case (l1, l2, num) =>
+          //println(s"traverse $num")
           // partition visible in the last level
           val partition = l2.map(sender).toSet
           // Message is part of detected partition
@@ -45,14 +54,17 @@ object SafetyOracle {
             .map(_.distinct.size == 1)
           val provedNotSafe = !partitionIncludesM // partition implied does not include sender of the target message
           if (provedNotSafe)
-            none[Set[S]].asRight[(List[M], List[M])].pure
+            none[Set[S]].asRight[(List[M], List[M], Int)].pure
           else {
             // Once safety is proved return partition inside which message is safe
-            val safeCase = partition.some.asRight[(List[M], List[M])].pure
+            val safeCase = {
+              //println("safe")
+              partition.some.asRight[(List[M], List[M], Int)].pure
+            }
             // If safety is not proved yet - proceed with the next layer
             val uncertainCase = nextLvl(lvl2).map { nextL =>
-              if (nextL.isEmpty) none[Set[S]].asRight[(List[M], List[M])]
-              else (l2, nextL).asLeft[Option[Set[S]]]
+              if (nextL.isEmpty) none[Set[S]].asRight[(List[M], List[M], Int)]
+              else (l2, nextL, num + 1).asLeft[Option[Set[S]]]
             }
             partitionIsCertainF.ifM(safeCase, uncertainCase)
           }

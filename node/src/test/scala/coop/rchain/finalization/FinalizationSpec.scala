@@ -44,7 +44,7 @@ class FinalizationSpec extends FlatSpec with Matchers {
           println(s"Generating dot image: $fileName")
 
           val dotCmd = Seq("dot", s"-T$imgType", "-o", fileName)
-          dotCmd #< new ByteArrayInputStream(graphString.getBytes) lineStream
+//          dotCmd #< new ByteArrayInputStream(graphString.getBytes) lineStream
         }
       } yield ()
     }
@@ -96,8 +96,8 @@ class FinalizationSpec extends FlatSpec with Matchers {
 
             // Merge networks
             net2 = fst1 >|< snd1
-            _    <- runSections(net2, List((3, .0f)), s"main2-$name")
-          } yield ()
+            r    <- runSections(net2, List((3, .0f)), s"main2-$name")
+          } yield r
       }
     }
   }
@@ -107,11 +107,25 @@ class FinalizationSpec extends FlatSpec with Matchers {
   val sut = new NetworkRunner[Task]()
 
   it should "run network with complete dag" in {
-    sut.runDagComplete.runSyncUnsafe()
+    val r        = sut.runDagComplete.runSyncUnsafe()
+    val (end, _) = r
+    val a = end.senders.toList.map(
+      _.realFringes
+        .map(_.toList.sortBy { case (k, _) => k.id }.map(_._2.id).toString())
+    )
+    println(a.mkString("\n"))
+
   }
 
   it should "run random network" in {
-    sut.runRandom.runSyncUnsafe()
+    val r        = sut.runRandom.runSyncUnsafe()
+    val (end, _) = r.last
+    val a = end.senders.toList.map(
+      _.realFringes
+        .map(_.toList.sortBy { case (k, _) => k.id }.map(_._2.id).toString())
+    )
+    println(a.mkString("\n"))
+
   }
 
   def dagAsCluster[F[_]: Sync: GraphSerializer](

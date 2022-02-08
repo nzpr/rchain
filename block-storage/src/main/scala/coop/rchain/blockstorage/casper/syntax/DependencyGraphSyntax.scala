@@ -43,46 +43,12 @@ final class DependencyGraphOps[F[_], M, S](val dg: DependencyGraph[F, M, S]) ext
 //      }
 //      .map(_.toMap)
 
-  def nextFF(
-      latestMessages: Map[S, M],
+  def finBody(
       curFringe: Map[S, M],
-      fullBondsMap: Map[S, Long],
-      computedCoveringsMap: mutable.TreeMap[S, Set[M]]
-  )(
-      implicit c: Concurrent[F],
-      log: Log[F],
-      show: Show[M]
-      //shows: Show[S]
-  ): F[Option[(Map[S, M], List[M])]] = {
-    val finalizer = Finalizer(latestMessages, curFringe)
+      newFringe: Map[S, M]
+  )(implicit c: Concurrent[F], log: Log[F], show: Show[M]): F[(Map[S, M], List[M])] =
     for {
-      fringe <- finalizer.run(
-                 dg.witnesses(_)
-                   .map(_.map(w => dg.sender(w) -> w).toMap)
-                   .flatTap(v => log.info(s"${v.size}")),
-                 dg.justifications(_).map(_.map(j => dg.sender(j) -> j).toMap)
-               )(dg.seqNum, dg.sender)
-//      fringeCandidate <- fringeCandidate(curFringe)
-      _ <- log.info(s"new FF candidate: ${fringe.map { case (_, m) => m.show }}")
-//      fringe = fringeCandidate.collect { case (s, Some(v)) => (s, v) }
-      // fringes that are smaller then supermajority should not be considered, as they cannot match the criteria so no reason to spend compute.
-      safe = fringe.nonEmpty && !Fringe.isFinal(fringe)(fullBondsMap)
-//      safe <- (fullBondsMap.keySet == fringe.keySet)
-//               .pure[F] //||^ SimpleProtocol1.isPartition(fringeCandidate, dg.children, dg.sender)
-      //      _ <- log
-      //            .info(s"Partition detected")
-      //            .whenA(safe && fringeCandidate.valuesIterator.contains(none[M]))
-      newFringe <- if (safe) {
-                    fringe.some.pure //combine(curFringe, fringe)(dg.seqNum).some.pure
-//                    val bondsMap = fullBondsMap.filterKeys(fringe.keySet.contains)
-//                    SimpleProtocol1
-//                      .run(fringe, bondsMap, dg.children, dg.sender)
-//                      .map(
-//                        (if (_) fringe.some else none[Map[S, M]])
-//                      )
-                  } else none[Map[S, M]].pure[F]
-
-      r <- newFringe.map(curFringe ++ _).traverse { fringe =>
+      r <- newFringe.some.map(curFringe ++ _).traverse { fringe =>
             for {
               childrenMaps <- fringe.values.toList
                                .traverse { m =>
@@ -115,8 +81,82 @@ final class DependencyGraphOps[F[_], M, S](val dg: DependencyGraph[F, M, S]) ext
               s"Found new FF ${r.get._1.values.map(_.show)}, extra messages finalized: ${r.get._2.size}."
             )
             .whenA(r.isDefined)
-    } yield r // update current fringe with new messages
-  }
+    } yield r.get // update current fringe with new messages
+
+//  def nextFF(
+//      latestMessages: Map[S, M],
+//      curFringe: Map[S, M],
+//      fullBondsMap: Map[S, Long],
+//      computedCoveringsMap: mutable.TreeMap[S, Set[M]]
+//  )(
+//      implicit c: Concurrent[F],
+//      log: Log[F],
+//      show: Show[M]
+//      //shows: Show[S]
+//  ): F[Option[(Map[S, M], List[M])]] = {
+//    val finalizer = Finalizer(latestMessages, curFringe)
+//    for {
+//      fringe <- finalizer.run(
+//                 dg.witnesses(_)
+//                   .map(_.map(w => dg.sender(w) -> w).toMap)
+//                   .flatTap(v => log.info(s"${v.size}")),
+//                 dg.justifications(_).map(_.map(j => dg.sender(j) -> j).toMap)
+//               )(dg.seqNum, dg.sender)
+////      fringeCandidate <- fringeCandidate(curFringe)
+//      _ <- log.info(s"new FF candidate: ${fringe.map { case (_, m) => m.show }}")
+////      fringe = fringeCandidate.collect { case (s, Some(v)) => (s, v) }
+//      // fringes that are smaller then supermajority should not be considered, as they cannot match the criteria so no reason to spend compute.
+//      safe = fringe.nonEmpty && !Fringe.isFinal(fringe)(fullBondsMap)
+////      safe <- (fullBondsMap.keySet == fringe.keySet)
+////               .pure[F] //||^ SimpleProtocol1.isPartition(fringeCandidate, dg.children, dg.sender)
+//      //      _ <- log
+//      //            .info(s"Partition detected")
+//      //            .whenA(safe && fringeCandidate.valuesIterator.contains(none[M]))
+//      newFringe <- if (safe) {
+//                    fringe.some.pure //combine(curFringe, fringe)(dg.seqNum).some.pure
+////                    val bondsMap = fullBondsMap.filterKeys(fringe.keySet.contains)
+////                    SimpleProtocol1
+////                      .run(fringe, bondsMap, dg.children, dg.sender)
+////                      .map(
+////                        (if (_) fringe.some else none[Map[S, M]])
+////                      )
+//                  } else none[Map[S, M]].pure[F]
+//
+//      r <- newFringe.map(curFringe ++ _).traverse { fringe =>
+//            for {
+//              childrenMaps <- fringe.values.toList
+//                               .traverse { m =>
+//                                 dg.justifications(m)
+//                                   .map(_.map(j => (dg.sender(j), (j, dg.seqNum(j)))).toMap)
+//                               }
+//              highestParents = childrenMaps
+//                .reduce { (l, r) =>
+//                  l.map {
+//                    case (s, (m, sn)) =>
+//                      if (r.get(s).exists(_._2 > sn)) (s, r(s)) else (s, (m, sn))
+//                  }
+//                }
+//              toMove = highestParents.filter {
+//                case (s, (_, sn)) => sn > dg.seqNum(fringe(s))
+//              }
+//              extraMsg <- toMove.toList.flatTraverse {
+//                           case (s, (m, _)) =>
+//                             selfJustificationChain(m)
+//                               .takeWhile(
+//                                 seqNum(_) > dg.seqNum(fringe(s))
+//                               )
+//                               .compile
+//                               .toList
+//                         }
+//            } yield (fringe ++ toMove.mapValues(_._1), extraMsg)
+//          }
+//      _ <- log
+//            .info(
+//              s"Found new FF ${r.get._1.values.map(_.show)}, extra messages finalized: ${r.get._2.size}."
+//            )
+//            .whenA(r.isDefined)
+//    } yield r // update current fringe with new messages
+//  }
 
 //  def nextFF(
 //      latestMessages: Map[S, M],

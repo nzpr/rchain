@@ -4,7 +4,7 @@ import cats.effect.concurrent.Ref
 import cats.syntax.all._
 import cats.{Id, Monad, Show}
 import coop.rchain.casper.pCasper.Fringe.{Fringe, LazyReconciler}
-import coop.rchain.casper.pCasper.{Casper, Finalizer, Fringe}
+import coop.rchain.casper.pCasper.{Fringe, PCasper}
 
 import coop.rchain.catscontrib.effect.implicits.syncId
 
@@ -65,7 +65,7 @@ object Simulation {
       seen: Map[Msg, MsgView] = Map(),
       childMap: Map[Msg, Map[Sender, Queue[Msg]]] = Map(),
       witnessMap: Map[Msg, Map[Sender, Msg]] = Map(),
-      realFringes: Ref[Id, Queue[Fringe[Msg, Sender]]]
+      realFringes: Queue[Fringe[Msg, Sender]]
   ) {
     override def hashCode(): Int = this.me.id.hashCode()
 
@@ -182,7 +182,7 @@ object Simulation {
         // Prepare view on finalization from views of parents
         // For the purpose of simulation conflict resolution and state merging on reconciliation is irrelevant.
         // Only the shape of the final fringe matters.
-        val reconciler = new LazyReconciler[Msg, Sender](_.senderSeq.toLong)
+        val reconciler = new LazyReconciler[Id, Msg, Sender](_.senderSeq.toLong)
         implicit val showSender: Show[Sender] = new Show[Sender] {
           override def show(t: Sender): String = s"${t.id}"
         }
@@ -192,21 +192,28 @@ object Simulation {
           justifications.filter(j => (loadMsgViews(j).map(_.root) intersect justifications).isEmpty)
 
         val allGenesis = bondsMap.map { case (s, _) => s -> Msg("g", -1, s, 0, Map()) }
-        val mFinalized = Casper.computeFinalityView[Id, Msg, Sender](
+        val r = PCasper.computeFinalityView[Id, Msg, Sender](
           allGenesis ++ justifications // this allGenesis is prefixed because genesis has only 1 sender
             .map(v => v.sender -> v)
             .toMap,
           parents.toList,
           reconciler,
-          f => realFringes.update(_ :+ f),
-          bondsMap
-        )(
-          seen(_).finalized,
+          bondsMap,
           witnessMap.getOrElse(_, Map()),
-          loadJfs(_).map(v => v.sender -> v).toMap,
+          loadJfs(_).map(v => v.sender -> v).toMap
+        )(
+          seen(_).finalized.pure,
           _.senderSeq.toLong,
           _.sender
         )
+        val (mFinalized, newFinal) = r
+
+        val newRealFringes = {
+          val newV = newFinal.flatMap(_.map(m => m.sender -> m)).toMap
+          if (newFinal.nonEmpty && !realFringes.contains(newV))
+            realFringes :+ newV
+          else realFringes
+        }
 
         /** FINALIZATION END */
 //        val partition = seenBySeen.flatMap(x => x._2.filter(y => seers(y.root.sender)))
@@ -247,7 +254,8 @@ object Simulation {
           heightMap = newHeightMap,
           seen = newSeen,
           childMap = newChildMap,
-          witnessMap = newWitMap
+          witnessMap = newWitMap,
+          realFringes = newRealFringes
         )
       }
 
@@ -337,7 +345,7 @@ object Simulation {
             dag,
             heightMap,
             seen,
-            realFringes = Ref.of[Id, Queue[Map[Sender, Msg]]](Queue(initFringe))
+            realFringes = Queue()
           )
       )
 

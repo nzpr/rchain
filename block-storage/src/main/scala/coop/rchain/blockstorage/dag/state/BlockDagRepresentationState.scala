@@ -17,7 +17,8 @@ final case class BlockDagRepresentationState(
     heightMap: SortedMap[Long, Set[BlockHash]],
     invalidBlocksSet: Set[BlockHash],
     finalizationState: BlockDagFinalizationState,
-    latestFringes: SortedMap[Long, DagFringe]
+    latestFringes: SortedMap[Long, DagFringe],
+    finalityViews: Map[Validator, Long]
 )
 
 object BlockDagRepresentationState {

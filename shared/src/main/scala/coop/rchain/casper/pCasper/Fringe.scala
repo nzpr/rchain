@@ -1,5 +1,5 @@
 package coop.rchain.casper.pCasper
-import cats.{Id, Monad}
+import cats.{Applicative, Id, Monad}
 import cats.syntax.all._
 
 object Fringe {
@@ -38,10 +38,11 @@ object Fringe {
     * Reconciler that does not do anything except merging shapes of input fringes.
     * Conflict resolution and merge is delayed, e.g. to the moment of real finalizations.
     */
-  final case class LazyReconciler[M, S](seqNum: M => Long) extends Reconciler[Id, M, S] {
-    override def reconcile(fringes: List[Fringe[M, S]]): Id[Fringe[M, S]] = {
+  final case class LazyReconciler[F[_]: Applicative, M, S](seqNum: M => Long)
+      extends Reconciler[F, M, S] {
+    override def reconcile(fringes: List[Fringe[M, S]]): F[Fringe[M, S]] = {
       require(fringes.nonEmpty, "Reconciling empty list of fringes.")
-      fringes.reduce(combine(_, _)(seqNum))
+      fringes.reduce(combine(_, _)(seqNum)).pure[F]
     }
   }
 

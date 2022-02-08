@@ -3,6 +3,8 @@ package coop.rchain.models
 import com.google.protobuf.ByteString
 import coop.rchain.casper.protocol._
 import scalapb.TypeMapper
+import cats.syntax.all._
+import coop.rchain.models.syntax.show
 
 final case class BlockMetadata(
     blockHash: ByteString,
@@ -14,7 +16,8 @@ final case class BlockMetadata(
     blockNum: Long,
     seqNum: Long,
     invalid: Boolean,
-    baseFringeNum: Long
+    baseFringeNum: Long,
+    finalView: Map[ByteString, ByteString]
 ) {
   override def equals(obj: Any): Boolean = obj match {
     case that: BlockMetadata => that.blockHash == this.blockHash
@@ -23,6 +26,8 @@ final case class BlockMetadata(
   override def hashCode(): Int = blockHash.hashCode()
 
   def toByteString = BlockMetadata.typeMapper.toBase(this).toByteString
+
+  override def toString: String = s"${blockHash.show}(bn $blockNum | sn $seqNum)"
 }
 
 object BlockMetadata {
@@ -37,7 +42,8 @@ object BlockMetadata {
       internal.blockNum,
       internal.seqNum,
       internal.invalid,
-      internal.baseFringeNum
+      internal.baseFringeNum,
+      internal.finalView.map(b => b.validator -> b.hash).toMap
     )
   } { metadata =>
     BlockMetadataInternal(
@@ -50,7 +56,8 @@ object BlockMetadata {
       metadata.seqNum,
       metadata.invalid,
       metadata.postStateHash,
-      metadata.baseFringeNum
+      metadata.baseFringeNum,
+      metadata.finalView.map { case (validator, hash) => FringeItemProto(validator, hash) }.toList
     )
   }
 
@@ -88,6 +95,7 @@ object BlockMetadata {
       b.body.state.blockNumber,
       b.seqNum,
       invalid,
-      baseFringeNum
+      baseFringeNum,
+      Map()
     )
 }

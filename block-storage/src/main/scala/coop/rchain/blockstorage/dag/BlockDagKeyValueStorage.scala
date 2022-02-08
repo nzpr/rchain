@@ -1,6 +1,6 @@
 package coop.rchain.blockstorage.dag
 
-import cats.Show
+import cats.{Id, Show}
 import cats.data.OptionT
 import cats.effect.concurrent.{Deferred, Ref, Semaphore}
 import cats.effect.{Concurrent, Sync}
@@ -17,10 +17,12 @@ import coop.rchain.blockstorage.dag.state.BlockDagRepresentationState.BlockDagFi
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.blockstorage.util.BlockMessageUtil._
 import coop.rchain.casper.PrettyPrinter
-import coop.rchain.casper.protocol.{BlockMessage, DeployChain}
+import coop.rchain.casper.protocol.{BlockMessage, Bond, DeployChain, Justification}
 import coop.rchain.blockstorage.casper.Casper
 import coop.rchain.blockstorage.casper.Casper.FinalizationFringe
 import coop.rchain.blockstorage.casper.ConflictsResolver.ConflictResolution
+import coop.rchain.casper.pCasper.Fringe.{isFinal, Fringe, LazyReconciler}
+import coop.rchain.casper.pCasper.{Finalizer, PCasper}
 import coop.rchain.metrics.Metrics.Source
 import coop.rchain.metrics.{Metrics, MetricsSemaphore}
 import coop.rchain.models.BlockHash.BlockHash
@@ -29,9 +31,10 @@ import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.{BlockHash, BlockMetadata, EquivocationRecord, Validator}
 import coop.rchain.shared.syntax._
-import coop.rchain.models.syntax._
 import coop.rchain.shared.{Base16, Log, LogSource}
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
+import coop.rchain.models.syntax._
+import coop.rchain.rspace.hashing.Blake2b256Hash
 
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
@@ -45,7 +48,8 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
     equivocationTrackerIndex: EquivocationTrackerStore[F],
     acceptedIndex: KeyValueTypedStore[F, DeployChain, Unit],
     rejectedIndex: KeyValueTypedStore[F, DeployChain, Unit],
-    latestFringesStore: KeyValueTypedStore[F, Long, DagFringe]
+    latestFringesStore: KeyValueTypedStore[F, Long, DagFringe],
+    finalityViewsStore: KeyValueTypedStore[F, Validator, Long]
 ) extends BlockDagStorage[F] {
   implicit private val logSource: LogSource = LogSource(BlockDagKeyValueStorage.getClass)
 
@@ -165,6 +169,7 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
       acceptedSet    <- acceptedIndex.toMap.map(_.keySet)
       rejectedSet    <- rejectedIndex.toMap.map(_.keySet)
       fringes        <- blockMetadataIndex.fringesMap
+      finalityViews  <- blockMetadataIndex.finalityMap
     } yield KeyValueDagRepresentation(
       BlockDagRepresentationState(
         dagSet,
@@ -174,7 +179,8 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
         heightMap,
         invalidBlocks,
         BlockDagFinalizationState(acceptedSet, rejectedSet),
-        fringes
+        fringes,
+        finalityViews
       )
     )
 
@@ -252,8 +258,8 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
         jsLvl2 <- js
                    .traverse(blockMetadataIndex.getUnsafe)
                    .map(_.flatMap(_.justifications.map(_.latestBlockHash)))
-        // TODO parents are not used, consider removing
-        blockMetadata = initMetadata.copy(parents = js diff jsLvl2)
+        blockFinal    <- representation.flatMap(updateFinalization(_, block))
+        blockMetadata = initMetadata.copy(parents = js diff jsLvl2).copy(finalView = blockFinal)
 
         // Add block metadata
         _ <- blockMetadataIndex.add(blockMetadata)
@@ -284,30 +290,34 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
     }
 
     def updateFinalization(
-        newDag: BlockDagRepresentation[F]
+        newDag: BlockDagRepresentation[F],
+        block: BlockMessage
     ) = {
       val casperMaxDepth = 100L
       val metaDag        = BlockMetadataDag(newDag)
       val safetyOracle   = BlockMetadataSafetyOracle()
       val casper         = BlockMetadataCasper(faultToleranceThreshold = -1, maxDepth = casperMaxDepth)
 
-      implicit val show = new Show[BlockMetadata] {
+      implicit val showMeta = new Show[BlockMetadata] {
         def show(meta: BlockMetadata): String =
           Base16.encode(meta.blockHash.toByteArray) + s" #${meta.seqNum}"
       }
 
-      import coop.rchain.models.syntax.{show => showsw}
+      import coop.rchain.models.syntax._
 
       import coop.rchain.blockstorage.casper.syntax.all._
       for {
-        _          <- Log[F].info(s"Updating finalization state.")
-        lms        <- newDag.latestMessages.map(_.values.map(v => (v.sender, v)))
-        allFringes <- blockMetadataIndex.fringesMap
-        _ <- allFringes.lastOption match {
+        _             <- Log[F].info(s"Updating finalization state.")
+        lms           <- newDag.latestMessages.map(_.values.map(v => (v.sender, v)))
+        finalityViews <- blockMetadataIndex.finalityMap
+        allFringes    <- blockMetadataIndex.fringesMap
+        r <- finalityViews.get(block.sender) match {
               // fringe exists - try update
-              case Some((latestIdx, DagFringe(latestFringe, lfs, _))) =>
+              case Some(latestIdx) =>
                 for {
-                  _ <- Log[F].info(s"latestFringe idx $latestIdx")
+                  r                               <- blockMetadataIndex.fringesMap
+                  DagFringe(latestFringe, lfs, _) = r(latestIdx)
+                  _                               <- Log[F].info(s"latestFringe idx $latestIdx")
                   latestFringeMeta <- latestFringe.toList
                                        .traverse {
                                          case (s, hs) =>
@@ -315,84 +325,203 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
                                              .traverse(h => newDag.lookupUnsafe(h))
                                              .map(v => (s, v.toSet))
                                        }
-                  newFringesRecorded <- casper.finalise(
-                                         lms.toList,
-                                         metaDag,
-                                         safetyOracle,
-                                         latestFringeMeta,
-                                         BlockDagKeyValueStorage.computedCoveringsMap
-                                       )
-                  _ <- mergeFOpt.traverse { merge =>
-                        ((latestFringeMeta, List.empty[BlockMetadata]) +: newFringesRecorded)
-                          .zip(newFringesRecorded)
-                          .foldLeftM[F, (StateHash, Long)]((lfs, latestIdx + 1)) {
-                            case ((prevLfs, nextIdx), ((curFringe, _), (nextFringe, extraMerge))) =>
-                              val curFringeBlocks = curFringe.flatMap(_._2).map(_.blockHash)
-                              val conflictSet = nextFringe
-                                .filter {
-                                  case (_, meta) =>
-                                    (curFringeBlocks.toSet intersect meta.map(_.blockHash)).isEmpty
-                                }
-                                .flatMap(_._2)
-                                .toSet ++ extraMerge
-                              for {
-                                v <- conflictSet.toList.traverse { m =>
-                                      val mFringe = allFringes
-                                        .find {
-                                          case (_, DagFringe(_, _, num)) => num == m.baseFringeNum
-                                        }
-                                        .map(_._2.finalizationFringe)
-
-                                      for {
-                                        _ <- Log[F].info(
-                                              s"Merging ${m.show}, baseFF ${m.baseFringeNum}"
-                                            )
-                                        stoppers <- mFringe
-                                                     .map(_.flatMap(_._2).toSet)
-                                                     .liftTo(
-                                                       new Exception(
-                                                         "no FF for message in DB when merging"
-                                                       )
-                                                     )
-                                        finSet <- curFringe
-                                                   .map(_._2)
-                                                   .traverse { m =>
-                                                     val stream = fs2.Stream
-                                                       .emits(m.toList)
-                                                       .covary[F] ++ metaDag
-                                                       .selfJustificationChain(m.head)
-                                                     stream
-                                                       .takeWhile(
-                                                         m => !stoppers.contains(m.blockHash)
-                                                       )
-                                                       .compile
-                                                       .toList
-                                                   }
-                                                   .map(_.flatten)
-                                      } yield (m, finSet.toSet)
-                                    }
-                                r        <- merge(prevLfs, v.toSet)
-                                (cr, sh) = r
-                                _ <- Log[F].info(
-                                      s"FF advanced to ${nextFringe
-                                        .flatMap(_._2.map(_.seqNum))
-                                        .mkString(";")} (${sh.toHexString} #${nextIdx})"
-                                    )
-                                _ <- rejectedIndex
-                                      .putIfAbsent(cr.rejectedSet.map((_, ())).toList) >>
-                                      acceptedIndex.putIfAbsent(cr.acceptedSet.map((_, ())).toList)
-                                // record new fringes
-                                f = DagFringe(
-                                  nextFringe.map { case (s, m) => (s, m.map(_.blockHash)) },
-                                  sh,
-                                  nextIdx
-                                )
-                                _ <- latestFringesStore.put(nextIdx, f)
-                                _ <- blockMetadataIndex.addFringe(f)
-                              } yield (sh, nextIdx + 1)
-                          }
+                  js <- block.justifications.traverse {
+                         case Justification(validator, latestBlockHash) =>
+                           newDag.lookupUnsafe(latestBlockHash).map(validator -> _)
+                       }
+                  parents = js
+                    .filterNot {
+                      case (_, v) =>
+                        v.justifications
+                          .map { case Justification(_, h) => h }
+                          .intersect(js.map(_._2.blockHash))
+                          .nonEmpty
+                    }
+                    .map { case (_, v) => v }
+                  reconciler = new LazyReconciler[F, BlockMetadata, Validator](_.seqNum)
+                  bonds = block.body.state.bonds.map {
+                    case Bond(validator, stake) => validator -> stake
+                  }.toMap
+                  witF = (m: BlockMetadata) =>
+                    newDag
+                      .witnesses(m.blockHash)
+                      .flatMap(
+                        _.traverse(
+                          _.toList
+                            .traverse { h =>
+                              newDag.lookupUnsafe(h).map(m => m.sender -> m)
+                            }
+                            .map(_.toMap)
+                        )
+                      )
+                      .map(_.getOrElse(Map()))
+//                      .flatTap { v =>
+//                        Log[F].info(s"witnesses of $m are ${v.values}")
+//                      }
+                  jsF = (m: BlockMetadata) =>
+                    m.justifications
+                      .map { case Justification(_, latestBlockHash) => latestBlockHash }
+                      .traverse(
+                        h => newDag.lookupUnsafe(h).map(m => m.sender -> m)
+                      )
+                      .map(_.toMap)
+                  finalF = (m: BlockMetadata) =>
+                    m.finalView.toList
+                      .traverse {
+                        case (s, hash) => newDag.lookupUnsafe(hash).map(s -> _)
                       }
-                } yield ()
+                      .map(_.toMap)
+                  r <- PCasper
+                        .computeFinalityView[F, BlockMetadata, Validator](
+                          js.toMap,
+                          parents,
+                          reconciler,
+                          bonds,
+                          witF,
+                          jsF
+                        )(
+                          finalF,
+//                          v =>
+//                            newDag
+//                              .finalizationFringes(v.baseFringeNum)
+//                              .finalizationFringe
+//                              .toList
+//                              .traverse {
+//                                case (s, hashes) => newDag.lookupUnsafe(hashes.head).map(s -> _)
+//                              }
+//                              .map(_.toMap),
+                          _.seqNum,
+                          _.sender
+                        )
+                  // TODO record provisionaly finalizations into some state. This should be used
+                  //  when advancing real finalization to merge bulk of messages in partition as a one item
+                  (newFringe, newFinal) = r
+                  newIdx                = latestIdx + 1
+                  updateFinalFringes = for {
+                    _ <- Log[F].info(
+                          s"Finalization advancement detected for sender ${block.sender.show}: #${latestIdx} + $newFinal -> #${newIdx}"
+                        )
+                    curFinalFringe = latestFringeMeta.toMap.mapValues(_.head)
+                    newFinalFringe = curFinalFringe ++ newFinal.flatMap { v =>
+                      v.map(m => m.sender -> m)
+                    }
+                    toRecord <- metaDag.finBody(curFinalFringe, newFinalFringe).map {
+                                 case (ff, extraMerge) =>
+                                   List(
+                                     (
+                                       ff.toList.map { case (s, v) => (s, Set(v)) },
+                                       extraMerge
+                                     )
+                                   )
+                               }
+                    existingFringeOpt = allFringes.get(newIdx)
+                    divergenceFound = existingFringeOpt.exists { existingFringe =>
+                      newFinalFringe.mapValues(_.blockHash) != existingFringe.finalizationFringe.toMap
+                        .mapValues(_.head)
+                    }
+                    errMsg = s"Diverging finalization for different senders is detected. \n " +
+                      s"Existing fringe #$newIdx is ${existingFringeOpt.map(
+                        _.finalizationFringe.toMap
+                          .mapValues(_.head.show)
+                          .values
+                          .toList
+                          .sorted
+                      )} \n" +
+                      s"fringe found is ${newFinalFringe.mapValues(_.blockHash.show).values.toList.sorted}"
+                    _ <- new Exception(errMsg).raiseError.whenA(divergenceFound)
+
+                    createFringe = mergeFOpt.traverse { merge =>
+                      ((latestFringeMeta, List.empty[BlockMetadata]) +: toRecord)
+                        .zip(toRecord)
+                        .foldLeftM[F, (StateHash, Long)]((lfs, latestIdx + 1)) {
+                          case (
+                              (prevLfs, nextIdx),
+                              ((curFringe, _), (nextFringe, extraMerge))
+                              ) =>
+                            val curFringeBlocks = curFringe.flatMap(_._2).map(_.blockHash)
+                            val conflictSet = nextFringe
+                              .filter {
+                                case (_, meta) =>
+                                  (curFringeBlocks.toSet intersect meta.map(_.blockHash)).isEmpty
+                              }
+                              .flatMap(_._2)
+                              .toSet ++ extraMerge
+                            for {
+                              v <- conflictSet.toList.traverse { m =>
+                                    val mFringe = allFringes
+                                      .find {
+                                        case (_, DagFringe(_, _, num)) => num == m.baseFringeNum
+                                      }
+                                      .map(_._2.finalizationFringe)
+
+                                    for {
+                                      _ <- Log[F].info(
+                                            s"Merging ${m.show}, baseFF ${m.baseFringeNum}"
+                                          )
+                                      stoppers <- mFringe
+                                                   .map(_.flatMap(_._2).toSet)
+                                                   .liftTo(
+                                                     new Exception(
+                                                       "no FF for message in DB when merging"
+                                                     )
+                                                   )
+                                      finSet <- curFringe
+                                                 .map(_._2)
+                                                 .traverse { m =>
+                                                   val stream = fs2.Stream
+                                                     .emits(m.toList)
+                                                     .covary[F] ++ metaDag
+                                                     .selfJustificationChain(m.head)
+                                                   stream
+                                                     .takeWhile(
+                                                       m => !stoppers.contains(m.blockHash)
+                                                     )
+                                                     .compile
+                                                     .toList
+                                                 }
+                                                 .map(_.flatten)
+                                    } yield (m, finSet.toSet)
+                                  }
+                              r        <- merge(prevLfs, v.toSet)
+                              (cr, sh) = r
+                              _ <- Log[F].info(
+                                    s"FF for sender ${block.sender.show} advanced to ${nextFringe
+                                      .flatMap(_._2.map(_.seqNum))
+                                      .mkString(";")} (${sh.toHexString} #${nextIdx})"
+                                  )
+                              _ <- rejectedIndex
+                                    .putIfAbsent(cr.rejectedSet.map((_, ())).toList) >>
+                                    acceptedIndex.putIfAbsent(
+                                      cr.acceptedSet.map((_, ())).toList
+                                    )
+                              // record new fringes
+                              f = DagFringe(
+                                nextFringe.map { case (s, m) => (s, m.map(_.blockHash)) },
+                                sh,
+                                nextIdx
+                              )
+                              _ <- latestFringesStore.put(nextIdx, f)
+                            } yield (sh, nextIdx + 1)
+                        }
+                    }
+                    r <- OptionT
+                          .fromOption[F](existingFringeOpt)
+                          .getOrElseF(createFringe.map {
+                            case v =>
+                              val Some((sh, _)) = v
+                              DagFringe(
+                                newFinalFringe.mapValues(v => Set(v.blockHash)).toList,
+                                sh,
+                                newIdx
+                              )
+                          })
+                    _ <- finalityViewsStore.put(block.sender, newIdx)
+                    _ <- blockMetadataIndex.addFringe(r, block.sender)
+                  } yield ()
+
+                  _ <- updateFinalFringes.whenA(newFinal.nonEmpty)
+
+                } yield newFringe.mapValues(_.blockHash)
               // does not exist - record block as a fringe
               case None => {
                 val f = DagFringe(
@@ -402,20 +531,29 @@ final class BlockDagKeyValueStorage[F[_]: Concurrent: Log] private (
                   block.body.state.postStateHash,
                   0L
                 )
-                blockMetadataIndex.addFringe(f) >>
+                blockMetadataIndex.addFringe(f, block.sender) >>
                   Log[F].info(s"latestFringesStore is empty. Inserting block as a fringe.") >>
-                  latestFringesStore.put(0L, f)
+                  latestFringesStore.put(0L, f) >> finalityViewsStore
+                  .put(block.sender, 0L)
+                  .as(f.finalizationFringe.toMap.mapValues(_.head))
               }
             }
-      } yield ()
+      } yield r
     }
 
+//    lock.withPermit(
+//      blockMetadataIndex.contains(block.blockHash).ifM(logAlreadyStored, doInsert) >>
+//        representation.flatMap(updateFinalization(_, block)) >> representation.map { r =>
+//        latestRepresentation.update((), r)
+//        r
+//      }
+//    )
     lock.withPermit(
       blockMetadataIndex.contains(block.blockHash).ifM(logAlreadyStored, doInsert) >>
-        representation.flatMap(updateFinalization) >> representation.map { r =>
-        latestRepresentation.update((), r)
-        r
-      }
+        representation.map { r =>
+          latestRepresentation.update((), r)
+          r
+        }
     )
   }
 
@@ -439,7 +577,8 @@ object BlockDagKeyValueStorage {
       deploys: KeyValueTypedStore[F, DeployId, BlockHash],
       accepted: KeyValueTypedStore[F, DeployChain, Unit],
       rejected: KeyValueTypedStore[F, DeployChain, Unit],
-      latestFringes: KeyValueTypedStore[F, Long, DagFringe]
+      latestFringes: KeyValueTypedStore[F, Long, DagFringe],
+      finalityViews: KeyValueTypedStore[F, Validator, Long]
   )
 
   private def createStores[F[_]: Concurrent: Log: Metrics](kvm: KeyValueStoreManager[F]) = {
@@ -492,7 +631,12 @@ object BlockDagKeyValueStorage {
                           scodec.codecs.vlong,
                           codecDagFringe
                         )
-      blockMetadataStore <- BlockMetadataStore[F](blockMetadataDb, latestFringesDB)
+      finalityViewsDb <- KeyValueStoreManager[F].database[Validator, Long](
+                          "finality-views",
+                          codecValidator,
+                          scodec.codecs.vlong
+                        )
+      blockMetadataStore <- BlockMetadataStore[F](blockMetadataDb, latestFringesDB, finalityViewsDb)
     } yield DagStores(
       blockMetadataStore,
       blockMetadataDb,
@@ -503,7 +647,8 @@ object BlockDagKeyValueStorage {
       deployIndexDb,
       acceptedIndexDb,
       rejectedIndexDb,
-      latestFringesDB
+      latestFringesDB,
+      finalityViewsDb
     )
   }
 
@@ -520,6 +665,7 @@ object BlockDagKeyValueStorage {
       stores.equivocations,
       stores.accepted,
       stores.rejected,
-      stores.latestFringes
+      stores.latestFringes,
+      stores.finalityViews
     )
 }

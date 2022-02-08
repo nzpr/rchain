@@ -2,9 +2,12 @@ package coop.rchain.casper.pCasper
 import cats.Show
 import cats.effect.Sync
 import cats.syntax.all._
-import coop.rchain.casper.pCasper.Fringe.{isFinal, Fringe, Reconciler}
+import coop.rchain.casper.pCasper.Fringe.{Fringe, Reconciler}
 
 object PCasper {
+
+  /** Message msg is final in a detected partition S. */
+  final case class FinalityDecision[M, S](msg: M, partition: Set[S])
 
   /**
     * Compute what message sees as a finalization fringe.
@@ -25,18 +28,18 @@ object PCasper {
       justifications: Map[S, M],
       parents: List[M],
       reconciler: Reconciler[F, M, S],
-      recordFinalFringe: Fringe[M, S] => F[Unit],
-      bonds: Map[S, Long]
-  )(
-      Final: M => Fringe[M, S],
-      seqNum: M => Long,
-      sender: M => S,
+      bonds: Map[S, Long],
       witnessesF: M => F[Map[S, M]],
       justificationsF: M => F[Map[S, M]]
-  ): F[Fringe[M, S]] = {
+  )(
+      Final: M => F[Fringe[M, S]],
+      seqNum: M => Long,
+      sender: M => S
+  ): F[(Fringe[M, S], List[List[M]])] = {
 
-    val reconcileParentViewsF = {
-      val toReconcile = parents.map(Final).distinct
+    val totalStake = bonds.valuesIterator.sum
+
+    def reconcileParentViewsF(toReconcile: List[Fringe[M, S]]): F[Fringe[M, S]] =
       if (toReconcile.size == 1)
         toReconcile.head.pure // nothing to reconcile, all parents are from the same partition
       else {
@@ -57,15 +60,25 @@ object PCasper {
         }
         reconciler.reconcile(toReconcile)
       }
-    }
 
     for {
-      // 1. Reconcile views of parents
-      parentsView <- reconcileParentViewsF
+      // 1. Reconcile views of parents.
+      parentsView <- parents.traverse(Final).map(_.distinct).flatMap(reconcileParentViewsF)
       // 2. Advance finalization bringing parents into the scope
       r <- Finalizer(justifications, parentsView).run(witnessesF, justificationsF)(seqNum, sender)
-      // If fringe advancement in a supermajority partition found, record finalization
-      _ <- r.traverse(fringe => recordFinalFringe(fringe).whenA(isFinal(fringe)(bonds)))
-    } yield r.getOrElse(parentsView)
+      toMerge = r.toList
+        .groupBy { case (_, FinalityDecision(_, partition)) => partition }
+        .map { case (partition, v) => partition.toIterator.map(bonds).sum -> v }
+        .toList
+        .sortBy { case (stake, _) => stake }
+        .reverse
+      // Messages that should be merged into final state
+      finalDecisions = toMerge
+        .takeWhile { case (partitionStake, _) => partitionStake * 3 > totalStake * 2 }
+        .map { case (_, v) => v.map { case (_, FinalityDecision(m, _)) => m } }
+      newFringe = parentsView ++ toMerge.flatMap {
+        case (_, v) => v.map { case (s, d) => s -> d.msg }
+      }
+    } yield (newFringe, finalDecisions)
   }
 }
