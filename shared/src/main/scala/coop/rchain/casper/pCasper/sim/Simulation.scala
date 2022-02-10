@@ -206,7 +206,7 @@ object Simulation {
           _.senderSeq.toLong,
           _.sender
         )
-        val (mFinalized, newFinal) = r
+        val (mFinalized, newFinal, _) = r
 
         val newRealFringes = {
           val newV = newFinal.flatMap(_.map(m => m.sender -> m)).toMap

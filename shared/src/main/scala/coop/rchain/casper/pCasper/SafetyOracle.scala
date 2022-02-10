@@ -26,46 +26,43 @@ object SafetyOracle {
       justificationsF: M => F[Map[S, M]]
   )(sender: M => S): F[Option[Set[S]]] = {
 
-    def nextLvl(curLvl: List[M]): F[List[M]] =
+    def nextLvl(curLvl: Vector[M]): F[Vector[M]] =
       curLvl
         .traverse(witnessesF)
         .map { witMaps =>
           // Senders that have a witness message for each message in the current level.
           val nextSenders = witMaps.map(_.keySet).reduceOption(_ intersect _).getOrElse(Set())
-          witMaps.flatMap(_.filterKeys(nextSenders.contains).valuesIterator)
+          witMaps.flatMap(_.filterKeys(nextSenders.contains).valuesIterator).distinct
         }
 
     for {
       // Biggest possible partition that message can be part of is the partition
       // consisting of senders that witness the message.
-      lvl1 <- witnessesF(m).map(_.valuesIterator.toList)
+      lvl1 <- witnessesF(m).map(_.valuesIterator.toVector)
       lvl2 <- nextLvl(lvl1)
       isSafe = (lvl1, lvl2, 0).tailRecM {
         case (l1, l2, num) =>
-          //println(s"traverse $num")
           // partition visible in the last level
           val partition = l2.map(sender).toSet
-          // Message is part of detected partition
+          // message is part of detected partition
           val partitionIncludesM = partition.contains(sender(m))
-          // Message cannot be part of another partition if messages that prove the partition
-          // have the same justifications from senders out of the partition
-          val partitionIsCertainF = (l1.toVector ++ l2)
-            .traverse(justificationsF(_).map(_.filterNot(j => partition.contains(j._1)).toSet))
-            .map(_.distinct.size == 1)
-          val provedNotSafe = !partitionIncludesM // partition implied does not include sender of the target message
+          // partition implied does not include sender of the target message - not safe
+          val provedNotSafe = !partitionIncludesM
           if (provedNotSafe)
-            none[Set[S]].asRight[(List[M], List[M], Int)].pure
+            none[Set[S]].asRight[(Vector[M], Vector[M], Int)].pure
           else {
             // Once safety is proved return partition inside which message is safe
-            val safeCase = {
-              //println("safe")
-              partition.some.asRight[(List[M], List[M], Int)].pure
-            }
+            val safeCase = partition.some.asRight[(Vector[M], Vector[M], Int)].pure
             // If safety is not proved yet - proceed with the next layer
-            val uncertainCase = nextLvl(lvl2).map { nextL =>
-              if (nextL.isEmpty) none[Set[S]].asRight[(List[M], List[M], Int)]
+            val uncertainCase = nextLvl(l2).map { nextL =>
+              if (nextL.isEmpty) none[Set[S]].asRight[(Vector[M], Vector[M], Int)]
               else (l2, nextL, num + 1).asLeft[Option[Set[S]]]
             }
+            // Message cannot be part of another partition if messages that prove the partition
+            // have the same justifications from senders out of the partition
+            val jsOOP =
+              justificationsF(_: M).map(_.filterNot { case (s, _) => partition.contains(s) }.toSet)
+            val partitionIsCertainF = (l1 ++ l2).distinct.traverse(jsOOP).map(_.distinct.size == 1)
             partitionIsCertainF.ifM(safeCase, uncertainCase)
           }
       }

@@ -1,8 +1,8 @@
 package coop.rchain.casper.pCasper
 import cats.effect.Sync
 import cats.syntax.all._
+import coop.rchain.casper.pCasper.Finalizer.FinalityDecision
 import coop.rchain.casper.pCasper.Fringe.Fringe
-import coop.rchain.casper.pCasper.PCasper.FinalityDecision
 
 /**
   * Finalizer searches for the next fringe that can be finalizer (maybe provisionally).
@@ -47,4 +47,10 @@ final case class Finalizer[F[_]: Sync, M, S](view: Map[S, M], curFringe: Fringe[
         result.map { case ((s, m), partition) => (s, FinalityDecision(m, partition)) }.toMap
       }
   }
+}
+
+object Finalizer {
+
+  /** Message msg is final in a detected partition S. */
+  final case class FinalityDecision[M, S](msg: M, partition: Set[S])
 }

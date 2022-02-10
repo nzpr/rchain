@@ -89,15 +89,15 @@ object BlockMetadataStore {
         _ <- store.put(block.blockHash, block)
       } yield ()
 
-    def addFringe(fringe: DagFringe, sender: Validator): F[Unit] = dagState.modify { st =>
+    def addFringe(fringe: DagFringe): F[Unit] = dagState.modify { st =>
 //      val fringeNum = fringe.num
 //      assert(
 //        st.fringesMap.get(fringeNum).forall(_ == fringe),
 //        "Diverging finalization for different senders is detected."
 //      )
       st.copy(
-        fringesMap = st.fringesMap.updated(fringe.num, fringe),
-        finalityViewMap = st.finalityViewMap.updated(sender, fringe.num)
+        fringesMap = st.fringesMap.updated(fringe.num, fringe)
+        //finalityViewMap = st.finalityViewMap.updated(sender, fringe.num)
       )
     }
 
