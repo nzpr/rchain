@@ -65,7 +65,8 @@ object Simulation {
       seen: Map[Msg, MsgView] = Map(),
       childMap: Map[Msg, Map[Sender, Queue[Msg]]] = Map(),
       witnessMap: Map[Msg, Map[Sender, Msg]] = Map(),
-      realFringes: Queue[Fringe[Msg, Sender]]
+      realFringes: Queue[Fringe[Msg, Sender]],
+      fringeProcessor: Ref[Id, FringeProcessor]
   ) {
     override def hashCode(): Int = this.me.id.hashCode()
 
@@ -210,9 +211,11 @@ object Simulation {
 
         val newRealFringes = {
           val newV = newFinal.flatMap(_.map(m => m.sender -> m)).toMap
-          if (newFinal.nonEmpty && !realFringes.contains(newV))
-            realFringes :+ newV
-          else realFringes
+          if (newFinal.nonEmpty && !realFringes.contains(newV)) {
+            val newFringes = realFringes :+ newV
+            fringeProcessor.update(_.addSenderFringe(me, newV.values.toSet))
+            newFringes
+          } else realFringes
         }
 
         /** FINALIZATION END */
@@ -335,6 +338,8 @@ object Simulation {
       )
     )
 
+    val fringeProcessor = Ref.of[Id, FringeProcessor](FringeProcessor(Map.empty))
+
     val senderStates =
       senders.map(
         s =>
@@ -345,7 +350,8 @@ object Simulation {
             dag,
             heightMap,
             seen,
-            realFringes = Queue()
+            realFringes = Queue(),
+            fringeProcessor = fringeProcessor
           )
       )
 
@@ -384,4 +390,33 @@ object Simulation {
           else newNet.asRight                       // Final value
         res.pure[F]
     }
+
+  final case class FringeProcessor(fringes: Map[Sender, Vector[Set[Msg]]]) {
+    def addSenderFringe(sender: Sender, fringe: Set[Msg]): FringeProcessor = {
+      // Add new fringe
+      val newFringes = fringes + fringes
+        .get(sender)
+        .map(v => v :+ fringe)
+        .map(sender -> _)
+        .getOrElse(sender -> Vector(fringe))
+
+      // Check if new fringe is consistent with existing fringes
+
+      // intersectingFringes is a sequence of messages which each sender has
+      // Example:
+      //  Sender1: [0 - 1 - 2] - 3 - 4
+      //  Sender2: [0 - 1 - 2]
+      //  Sender3: [0 - 1 - 2] - 3
+      val minFringeLength     = newFringes.values.map(_.length).min
+      val intersectingFringes = newFringes.values.map(_.take(minFringeLength))
+
+      // All intersecting fringes must be the same
+      assert(
+        intersectingFringes.forall(_ == intersectingFringes.head),
+        "Fringes of senders are not equals"
+      )
+
+      FringeProcessor(newFringes)
+    }
+  }
 }
