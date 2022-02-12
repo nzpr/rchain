@@ -28,11 +28,20 @@ object SafetyOracle {
 
     def nextLvl(curLvl: Vector[M]): F[Vector[M]] =
       curLvl
-        .traverse(witnessesF)
-        .map { witMaps =>
-          // Senders that have a witness message for each message in the current level.
-          val nextSenders = witMaps.map(_.keySet).reduceOption(_ intersect _).getOrElse(Set())
-          witMaps.flatMap(_.filterKeys(nextSenders.contains).valuesIterator).distinct
+        .traverse(m => witnessesF(m).map(m -> _))
+        .map(_.toMap)
+        .map { witMaps => // map message of current level -> witnesses of the message
+          // Next next partition for each message - senders of all witnesses of the message.
+          val nextSendersMap = witMaps.map { case (m, witMap) => sender(m) -> witMap.keySet }
+          // Possible partitions.
+          val partitionOptions = Vector(Set.empty[S]) ++ nextSendersMap.map {
+            case (s, wits) => wits.filter(w => nextSendersMap.get(w).exists(_.contains(s)))
+          }
+          // Maximum possible partition detected
+          val nextPartition = partitionOptions.maxBy(_.size)
+          witMaps.toVector.flatMap {
+            case (_, wits) => wits.filterKeys(nextPartition.contains).valuesIterator
+          }.distinct
         }
 
     for {
@@ -62,7 +71,11 @@ object SafetyOracle {
             // have the same justifications from senders out of the partition
             val jsOOP =
               justificationsF(_: M).map(_.filterNot { case (s, _) => partition.contains(s) }.toSet)
-            val partitionIsCertainF = (l1 ++ l2).distinct.traverse(jsOOP).map(_.distinct.size == 1)
+            val partitionIsCertainF = (l1 ++ l2)
+              .filter(m => partition.contains(sender(m)))
+              .distinct
+              .traverse(jsOOP)
+              .map(_.distinct.size == 1)
             partitionIsCertainF.ifM(safeCase, uncertainCase)
           }
       }
