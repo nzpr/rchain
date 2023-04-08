@@ -48,7 +48,6 @@ case class TestNode[F[_]: Async](
     tls: TransportLayerServerTestImpl[F],
     genesis: BlockMessage,
     validatorIdOpt: Option[ValidatorIdentity],
-    logicalTime: LogicalTime[F],
     synchronyConstraintThreshold: Double,
     dataDir: Path,
     maxNumberOfParents: Int = Int.MaxValue,
@@ -318,11 +317,10 @@ object TestNode {
       maxParentDepth: Option[Int],
       withReadOnlySize: Int
   ): Resource[F, IndexedSeq[TestNode[F]]] = {
-    val n           = sks.length
-    val names       = (1 to n).map(i => if (i <= (n - withReadOnlySize)) s"node-$i" else s"readOnly-$i")
-    val isReadOnly  = (1 to n).map(i => if (i <= (n - withReadOnlySize)) false else true)
-    val peers       = names.map(peerNode(_, 40400))
-    val logicalTime = new LogicalTime[F]
+    val n          = sks.length
+    val names      = (1 to n).map(i => if (i <= (n - withReadOnlySize)) s"node-$i" else s"readOnly-$i")
+    val isReadOnly = (1 to n).map(i => if (i <= (n - withReadOnlySize)) false else true)
+    val peers      = names.map(peerNode(_, 40400))
 
     val nodesF =
       names
@@ -338,7 +336,6 @@ object TestNode {
               genesis,
               sk,
               storageMatrixPath,
-              logicalTime,
               synchronyConstraintThreshold,
               maxNumberOfParents,
               maxParentDepth,
@@ -373,7 +370,6 @@ object TestNode {
       genesis: BlockMessage,
       sk: PrivateKey,
       storageDir: Path,
-      logicalTime: LogicalTime[F],
       synchronyConstraintThreshold: Double,
       maxNumberOfParents: Int,
       maxParentDepth: Option[Int],
@@ -465,7 +461,6 @@ object TestNode {
                    tls,
                    genesis,
                    validatorId,
-                   logicalTime,
                    synchronyConstraintThreshold,
                    newStorageDir,
                    maxNumberOfParents,

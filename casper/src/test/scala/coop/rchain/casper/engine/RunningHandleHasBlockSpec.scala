@@ -15,12 +15,7 @@ import coop.rchain.comm.rp.RPConf
 import coop.rchain.comm.{Endpoint, NodeIdentifier, PeerNode}
 import coop.rchain.metrics.Metrics
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.p2p.EffectsTestInstances.{
-  createRPConfAsk,
-  LogStub,
-  LogicalTime,
-  TransportLayerStub
-}
+import coop.rchain.p2p.EffectsTestInstances.{createRPConfAsk, LogStub, TransportLayerStub}
 import coop.rchain.shared.Log
 import org.scalatest._
 import org.scalatest.funspec.AnyFunSpec
@@ -40,7 +35,6 @@ class RunningHandleHasBlockSpec extends AnyFunSpec with BeforeAndAfterEach with 
     Ref.unsafe[IO, Connections](List(local))
   implicit val transportLayer = new TransportLayerStub[IO]
   implicit val rpConf         = createRPConfAsk[IO](local)
-  implicit val time           = new LogicalTime[IO]
   implicit val commUtil       = CommUtil.of[IO]
   implicit val blockRetriever = BlockRetriever.of[IO]
 
@@ -59,7 +53,6 @@ class RunningHandleHasBlockSpec extends AnyFunSpec with BeforeAndAfterEach with 
   override def beforeEach(): Unit = {
     transportLayer.reset()
     transportLayer.setResponses(alwaysSuccess)
-    time.reset()
   }
 
   describe("BlockRetriever") {

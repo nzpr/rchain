@@ -8,7 +8,6 @@ import coop.rchain.casper.rholang.{BlockRandomSeed, Resources, RuntimeManager}
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.{ConstructDeploy, GenesisBuilder}
 import coop.rchain.models.syntax.modelsSyntaxByteString
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.rspace.merger.{EventLogIndex, EventLogMergingLogic}
 import coop.rchain.sdk.dag.merging.ConflictResolutionLogic

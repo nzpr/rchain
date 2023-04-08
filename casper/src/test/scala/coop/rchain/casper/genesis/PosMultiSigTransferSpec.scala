@@ -7,7 +7,6 @@ import coop.rchain.casper.helper.TestNode._
 import coop.rchain.casper.util.ConstructDeploy
 import coop.rchain.crypto.PrivateKey
 import coop.rchain.crypto.signatures.Secp256k1
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib._
 import coop.rchain.models.syntax._
 import coop.rchain.rholang.build.CompiledRholangTemplate
@@ -20,8 +19,7 @@ class PosMultiSigTransferSpec extends AnyFlatSpec with Matchers with Inspectors 
 
   import coop.rchain.casper.util.GenesisBuilder._
 
-  implicit val timeEff = new LogicalTime[Effect]
-  val shardId          = "root"
+  val shardId = "root"
   val p1 =
     PrivateKey("fc743bd08a822d544bfbe05a5663fc325039a44c8f0c7fbea95a85517da5c36b".unsafeDecodeHex)
   val pub1 = Secp256k1.toPublic(p1)

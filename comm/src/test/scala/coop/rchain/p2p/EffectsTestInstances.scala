@@ -19,24 +19,6 @@ object EffectsTestInstances {
 
   val networkId = "test"
 
-  class LogicalTime[F[_]: Sync] {
-    var clock: Long = 0
-
-    def currentMillis: F[Long] = Sync[F].delay {
-      this.clock = clock + 1
-      clock
-    }
-
-    def nanoTime: F[Long] = Sync[F].delay {
-      this.clock = clock + 1
-      clock
-    }
-
-    def sleep(duration: FiniteDuration): F[Unit] = Sync[F].delay(())
-
-    def reset(): Unit = this.clock = 0
-  }
-
   class NodeDiscoveryStub[F[_]: Sync]() extends NodeDiscovery[F] {
 
     var nodes: List[PeerNode] = List.empty[PeerNode]

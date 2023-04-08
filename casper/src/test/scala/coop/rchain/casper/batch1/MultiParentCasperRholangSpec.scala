@@ -6,7 +6,6 @@ import coop.rchain.casper.protocol.BlockMessage
 import coop.rchain.casper.rholang.{BlockRandomSeed, RuntimeManager, Tools}
 import coop.rchain.casper.util.{ConstructDeploy, ProtoUtil, RSpaceUtil}
 import coop.rchain.crypto.signatures.Secp256k1
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.models.syntax._
 import coop.rchain.shared.Base16
@@ -19,8 +18,6 @@ class MultiParentCasperRholangSpec extends AnyFlatSpec with Matchers with Inspec
 
   import RSpaceUtil._
   import coop.rchain.casper.util.GenesisBuilder._
-
-  implicit val timeEff: LogicalTime[Effect] = new LogicalTime[Effect]
 
   val genesis = buildGenesis()
 

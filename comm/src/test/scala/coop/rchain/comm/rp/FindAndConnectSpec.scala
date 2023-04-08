@@ -31,7 +31,6 @@ class FindAndConnectSpec
   val src: PeerNode              = peer("src")
   val deftimeout: FiniteDuration = FiniteDuration(1, MILLISECONDS)
   implicit val log               = new Log.NOPLog[IO]
-  implicit val time              = new LogicalTime[Effect]
   implicit val metric            = new Metrics.MetricsNOP[IO]
   implicit val nodeDiscovery     = new NodeDiscoveryStub[Effect]()
   implicit val rpConf            = conf(defaultTimeout = deftimeout)

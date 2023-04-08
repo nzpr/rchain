@@ -14,14 +14,12 @@ import coop.rchain.casper.syntax._
 import coop.rchain.models.Expr.ExprInstance.GBool
 import coop.rchain.models.rholang.implicits._
 import coop.rchain.models.{GDeployerId, Par}
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib.effectTest
 import coop.rchain.shared.{Base16, Log}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 class DeployerIdTest extends AnyFlatSpec with Matchers {
-  implicit val time              = new LogicalTime[IO]
   implicit val log: Log[IO]      = new Log.NOPLog[IO]()
   private val dummyMergeableName = BlockRandomSeed.nonNegativeMergeableTagName("dummy")
 

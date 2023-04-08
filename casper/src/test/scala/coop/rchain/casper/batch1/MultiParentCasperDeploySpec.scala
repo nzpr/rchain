@@ -4,7 +4,6 @@ import coop.rchain.casper.blocks.proposer.{Created, NoNewDeploys}
 import coop.rchain.casper.helper.TestNode._
 import coop.rchain.casper.helper.{BlockApiFixture, TestNode}
 import coop.rchain.casper.util.ConstructDeploy
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.Inspectors

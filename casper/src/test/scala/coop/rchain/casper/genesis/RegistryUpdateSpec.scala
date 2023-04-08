@@ -6,7 +6,6 @@ import coop.rchain.casper.helper.TestNode._
 import coop.rchain.casper.util.ConstructDeploy
 import coop.rchain.crypto.PrivateKey
 import coop.rchain.crypto.signatures.Secp256k1
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib._
 import coop.rchain.models.syntax._
 import coop.rchain.rholang.interpreter.util.RevAddress
@@ -19,8 +18,6 @@ import scala.io.Source
 class RegistryUpdateSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   import coop.rchain.casper.util.GenesisBuilder._
-
-  implicit val timeEff = new LogicalTime[Effect]
 
   it should "update the testLib right" in effectTest {
     val shardId = "root"

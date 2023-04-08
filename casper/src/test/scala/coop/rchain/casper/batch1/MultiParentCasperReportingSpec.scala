@@ -7,7 +7,6 @@ import coop.rchain.casper.rholang.Resources
 import coop.rchain.casper.util.ConstructDeploy
 import coop.rchain.casper.reporting.{ReportStore, ReportingCasper}
 import coop.rchain.models.{BindPattern, ListParWithRandom, Par, TaggedContinuation}
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rspace.ReportingRspace.ReportingComm
 import coop.rchain.shared.scalatestcontrib.effectTest
 import coop.rchain.store.InMemoryStoreManager
@@ -19,8 +18,6 @@ import org.scalatest.matchers.should.Matchers
 class MultiParentCasperReportingSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   import coop.rchain.casper.util.GenesisBuilder._
-
-  implicit val timeEff: LogicalTime[Effect] = new LogicalTime[Effect]
 
   val genesis: GenesisContext = buildGenesis()
 

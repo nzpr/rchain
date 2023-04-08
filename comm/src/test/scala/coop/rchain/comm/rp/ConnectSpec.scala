@@ -27,7 +27,6 @@ class ConnectSpec extends AnyFunSpec with Matchers with BeforeAndAfterEach with 
   type Effect[A] = CommErrT[IO, A]
 
   implicit val logEff            = new Log.NOPLog[Effect]
-  implicit val timeEff           = new LogicalTime[Effect]
   implicit val metricEff         = new Metrics.MetricsNOP[Effect]
   implicit val nodeDiscoveryEff  = new NodeDiscoveryStub[Effect]()
   implicit val transportLayerEff = new TransportLayerStub[Effect]

@@ -9,7 +9,6 @@ import coop.rchain.models.GDeployId
 import coop.rchain.models.rholang.RhoType.{RhoBoolean, RhoNumber, RhoString, RhoTuple2}
 import coop.rchain.models.rholang.implicits._
 import coop.rchain.models.syntax._
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.util.RevAddress
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.Inside.inside
@@ -23,7 +22,6 @@ class PosUpdateSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   import coop.rchain.casper.util.GenesisBuilder._
 
-  implicit val timeEff           = new LogicalTime[Effect]
   private val shardId            = "root"
   private val hexP1              = "fc743bd08a822d544bfbe05a5663fc325039a44c8f0c7fbea95a85517da5c36b"
   private val hexP2              = "6e88cf274735f3f7f73ec3d7f0362c439ab508427682b5bd788007aca665d810"

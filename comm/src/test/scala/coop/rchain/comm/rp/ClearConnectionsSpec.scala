@@ -9,7 +9,7 @@ import coop.rchain.comm._
 import coop.rchain.comm.protocol.routing._
 import coop.rchain.comm.rp.Connect._
 import coop.rchain.metrics.Metrics
-import coop.rchain.p2p.EffectsTestInstances.{LogicalTime, TransportLayerStub}
+import coop.rchain.p2p.EffectsTestInstances.TransportLayerStub
 import coop.rchain.shared._
 import org.scalatest._
 import org.scalatest.funspec.AnyFunSpec
@@ -31,7 +31,6 @@ class ClearConnectionsSpec
   implicit val transport = new TransportLayerStub[IO]
   implicit val log       = new Log.NOPLog[IO]
   implicit val metric    = new Metrics.MetricsNOP[IO]
-  implicit val time      = new LogicalTime[IO]
 
   override def beforeEach(): Unit = {
     transport.reset()

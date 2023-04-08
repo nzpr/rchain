@@ -12,7 +12,7 @@ import coop.rchain.comm.rp.RPConf
 import coop.rchain.comm.{Endpoint, NodeIdentifier, PeerNode}
 import coop.rchain.metrics.Metrics.MetricsNOP
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.p2p.EffectsTestInstances.{LogStub, LogicalTime, TransportLayerStub}
+import coop.rchain.p2p.EffectsTestInstances.{LogStub, TransportLayerStub}
 import coop.rchain.shared._
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.funspec.AnyFunSpec
@@ -114,7 +114,6 @@ class CommUtilSpec extends AnyFunSpec with BeforeAndAfterEach with Matchers {
   implicit val transport = new TransportLayerStub[IO]
   implicit val askConf   = new ConstApplicativeAsk[IO, RPConf](conf)
   implicit val log       = new LogStub[IO]
-  implicit val time      = new LogicalTime[IO]
   implicit val metrics   = new MetricsNOP[IO]
 
   private def initRequestedBlocks(

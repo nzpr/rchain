@@ -11,7 +11,6 @@ import coop.rchain.crypto.hash.Blake2b512Random
 import coop.rchain.metrics.Span
 import coop.rchain.models.Par
 import coop.rchain.models.rholang.RhoType.{RhoName, RhoNumber}
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.accounting.Cost
 import coop.rchain.rholang.interpreter.merging.RholangMergingLogic
 import coop.rchain.rholang.interpreter.merging.RholangMergingLogic.convertToReadNumber
@@ -301,7 +300,6 @@ class MergeNumberChannelSpec extends AnyFlatSpec {
       } yield ()
     }
   }
-  implicit val timeEff = new LogicalTime[IO]
   implicit val logEff  = Log.log[IO]
   implicit val spanEff = Span.noop[IO]
 

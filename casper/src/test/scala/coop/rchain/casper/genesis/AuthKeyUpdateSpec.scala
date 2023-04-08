@@ -9,7 +9,6 @@ import coop.rchain.models.GDeployId
 import coop.rchain.models.rholang.RhoType.{RhoBoolean, RhoString, RhoTuple2}
 import coop.rchain.models.rholang.implicits._
 import coop.rchain.models.syntax._
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.util.RevAddress
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.Inspectors
@@ -22,8 +21,7 @@ class AuthKeyUpdateSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   import coop.rchain.casper.util.GenesisBuilder._
 
-  implicit val timeEff = new LogicalTime[Effect]
-  private val shardId  = "root"
+  private val shardId = "root"
   private val p1 =
     PrivateKey("fc743bd08a822d544bfbe05a5663fc325039a44c8f0c7fbea95a85517da5c36b".unsafeDecodeHex)
   private val pub1 = Secp256k1.toPublic(p1)

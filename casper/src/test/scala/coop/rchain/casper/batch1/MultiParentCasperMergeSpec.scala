@@ -1,9 +1,9 @@
 package coop.rchain.casper.batch1
 
+import cats.effect.Sync
 import coop.rchain.casper.helper.TestNode
 import coop.rchain.casper.helper.TestNode._
 import coop.rchain.casper.util.{ConstructDeploy, RSpaceUtil}
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.Inspectors
@@ -13,8 +13,6 @@ class MultiParentCasperMergeSpec extends AnyFlatSpec with Matchers with Inspecto
 
   import RSpaceUtil._
   import coop.rchain.casper.util.GenesisBuilder._
-
-  implicit val timeEff = new LogicalTime[Effect]
 
   val genesisParams = buildGenesisParametersSize(3)
   val genesis       = buildGenesis(genesisParams)
@@ -167,17 +165,10 @@ class MultiParentCasperMergeSpec extends AnyFlatSpec with Matchers with Inspecto
   it should "not merge blocks that touch the same channel involving joins" ignore effectTest {
     TestNode.networkEff(genesis, networkSize = 2).use { nodes =>
       for {
-        current0 <- timeEff.currentMillis
-        deploy0 = ConstructDeploy.sourceDeploy(
-          "@1!(47)",
-          current0,
-          sec = ConstructDeploy.defaultSec2
-        )
-        current1 <- timeEff.currentMillis
-        deploy1 = ConstructDeploy.sourceDeploy(
-          "for(@x <- @1 & @y <- @2){ @1!(x) }",
-          current1
-        )
+        deploy0 <- Sync[Effect].delay(
+                    ConstructDeploy.sourceDeploy("@1!(47)", 1L, sec = ConstructDeploy.defaultSec2)
+                  )
+        deploy1 = ConstructDeploy.sourceDeploy("for(@x <- @1 & @y <- @2){ @1!(x) }", 2L)
         deploy2 <- ConstructDeploy.basicDeployData[Effect](2)
         deploys = Vector(
           deploy0,

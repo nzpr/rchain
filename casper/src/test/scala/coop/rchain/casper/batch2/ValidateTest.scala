@@ -51,10 +51,7 @@ class ValidateTest
   implicit val metrics: Metrics[IO] = new Metrics.MetricsNOP[IO]()
   implicit val s                    = Sync[IO]
 
-  override def beforeEach(): Unit = {
-    log.reset()
-    timeEff.reset()
-  }
+  override def beforeEach(): Unit = log.reset()
 
   def createChain[F[_]: Async: BlockStore: BlockDagStorage](
       length: Int,

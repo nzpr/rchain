@@ -14,7 +14,6 @@ import coop.rchain.comm.rp.ProtocolHelper.packet
 import coop.rchain.crypto.signatures.{Secp256k1, Signed}
 import coop.rchain.models.PCost
 import coop.rchain.models.syntax._
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.shared.scalatestcontrib._
 import coop.rchain.shared.syntax._
@@ -31,7 +30,6 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
   import ValidBlock._
   import coop.rchain.casper.util.GenesisBuilder._
 
-  implicit val timeEff = new LogicalTime[Effect]
   implicit val s       = Sync[IO]
   val genesis          = buildGenesis()
   private val SHARD_ID = genesis.genesisBlock.shardId
@@ -164,7 +162,6 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
   /*
   it should "reject unsigned blocks" in effectTest {
     TestNode.standaloneEff(genesis).use { node =>
-      implicit val timeEff = new LogicalTime[Effect]
 
       for {
         basicDeployData <- ConstructDeploy.basicDeployData[Effect](0)

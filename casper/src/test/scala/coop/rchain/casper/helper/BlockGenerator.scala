@@ -22,7 +22,6 @@ import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash._
 import coop.rchain.models.blockImplicits.getRandomBlock
 import coop.rchain.models.syntax._
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.shared.syntax._
 import coop.rchain.shared.{Log, LogSource}
@@ -31,7 +30,6 @@ object BlockGenerator {
   private[this] val GenerateBlockMetricsSource =
     Metrics.Source(CasperMetricsSource, "generate-block")
 
-  implicit val timeEff              = new LogicalTime[IO]
   implicit val logSource: LogSource = LogSource(this.getClass)
 
   // Dummy empty Casper snapshot

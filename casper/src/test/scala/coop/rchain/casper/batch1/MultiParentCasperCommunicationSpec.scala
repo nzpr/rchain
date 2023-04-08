@@ -8,7 +8,6 @@ import coop.rchain.casper.helper.TestNode._
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.util.ConstructDeploy
 import coop.rchain.crypto.signatures.Signed
-import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.Inspectors
@@ -17,8 +16,6 @@ import org.scalatest.matchers.should.Matchers
 class MultiParentCasperCommunicationSpec extends AnyFlatSpec with Matchers with Inspectors {
 
   import coop.rchain.casper.util.GenesisBuilder._
-
-  implicit val timeEff = new LogicalTime[Effect]
 
   val genesis = buildGenesis()
 

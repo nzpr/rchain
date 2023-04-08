@@ -60,6 +60,7 @@ object HashSetCasperActions {
     ConstructDeploy.sourceDeploy(s"new x in { x!(0) }", ts, shardId = "root")
 
   implicit class EffectOps[A](f: Effect[A]) {
+    import cats.effect.unsafe.implicits.global
     def result: A = f.unsafeRunSync
   }
 }
