@@ -1,7 +1,6 @@
 package coop.rchain.node.runtime
 
-import cats.effect.concurrent.{Deferred, Ref}
-import cats.effect.{Concurrent, ContextShift, Timer}
+import cats.effect.Async
 import cats.mtl.ApplicativeAsk
 import cats.syntax.all._
 import cats.{Parallel, Show}
@@ -44,11 +43,11 @@ import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueStoreManager
 import fs2.Stream
-import fs2.concurrent.Queue
-import monix.execution.Scheduler
+import fs2.concurrent.Channel
+import cats.effect.{Deferred, Ref, Temporal}
 
 object Setup {
-  def setupNodeProgram[F[_]: Concurrent: Parallel: ContextShift: Timer: LocalEnvironment: TransportLayer: NodeDiscovery: Log: Metrics](
+  def setupNodeProgram[F[_]: Async: Parallel: LocalEnvironment: TransportLayer: NodeDiscovery: Log: Metrics](
       storeManager: KeyValueStoreManager[F],
       rpConnections: ConnectionsCell[F],
       rpConfAsk: ApplicativeAsk[F, RPConf],
@@ -58,17 +57,13 @@ object Setup {
   ): F[
     (
         Stream[F, Unit], // Node startup process (protocol messages handling)
-        Queue[F, RoutingMessage],
+        Channel[F, RoutingMessage],
         GrpcServices[F],
         WebApi[F],
         AdminWebApi[F],
         ReportingHttpRoutes[F]
     )
   ] = {
-    // TODO: temporary until Time is removed completely
-    //  https://github.com/rchain/rchain/issues/3730
-    implicit val time = Time.fromTimer(Timer[F])
-
     for {
       // Block execution tracker
       executionTracker <- StatefulExecutionTracker[F]
@@ -89,14 +84,12 @@ object Setup {
       // Runtime for `rnode eval`
       evalRuntime <- {
         implicit val sp = span
-        import RChainScheduler._
-        storeManager.evalStores.flatMap(RhoRuntime.createRuntime[F](_, Par(), rholangEC))
+        storeManager.evalStores.flatMap(RhoRuntime.createRuntime[F](_, Par()))
       }
 
       // Runtime manager (play and replay runtimes)
       runtimeManagerWithHistory <- {
         implicit val sp = span
-        import RChainScheduler._
         for {
           rStores    <- storeManager.rSpaceStores
           mergeStore <- RuntimeManager.mergeableStore(storeManager)
@@ -105,8 +98,7 @@ object Setup {
                    rStores,
                    mergeStore,
                    BlockRandomSeed.nonNegativeMergeableTagName(conf.casper.shardName),
-                   executionTracker,
-                   rholangEC
+                   executionTracker
                  )
         } yield rm
       }
@@ -157,13 +149,13 @@ object Setup {
       }
 
       // Propose request is a tuple - Casper, async flag and deferred proposer result that will be resolved by proposer
-      proposerQueue <- Queue.unbounded[F, (Boolean, Deferred[F, ProposerResult])]
+      proposerQueue <- Channel.unbounded[F, (Boolean, Deferred[F, ProposerResult])]
       triggerProposeFOpt: Option[ProposeFunction[F]] = if (proposer.isDefined)
         Some(
           (isAsync: Boolean) =>
             for {
               d <- Deferred[F, ProposerResult]
-              _ <- proposerQueue.enqueue1((isAsync, d))
+              _ <- proposerQueue.send((isAsync, d))
               r <- d.get
             } yield r
         )
@@ -171,18 +163,18 @@ object Setup {
       proposerStateRefOpt <- triggerProposeFOpt.traverse(_ => Ref.of(ProposerState[F]()))
 
       // Queue of received blocks from gRPC API
-      incomingBlocksQueue <- Queue.unbounded[F, BlockMessage]
+      incomingBlocksQueue <- Channel.unbounded[F, BlockMessage]
       // Stream of blocks received over the network
-      incomingBlockStream = incomingBlocksQueue.dequeue
+      incomingBlockStream = incomingBlocksQueue.stream
       // Queue of validated blocks, result of block processor
-      validatedBlocksQueue <- Queue.unbounded[F, BlockMessage]
+      validatedBlocksQueue <- Channel.unbounded[F, BlockMessage]
       // Validated blocks stream with auto-propose trigger
-      validatedBlocksStream = validatedBlocksQueue.dequeue.evalTap { _ =>
+      validatedBlocksStream = validatedBlocksQueue.stream.evalTap { _ =>
         // If auto-propose is enabled, trigger propose immediately after block finished validation
         triggerProposeFOpt.traverse(_(true)) whenA conf.autopropose
       }
       // Queue of network (protocol) messages
-      routingMessageQueue <- Queue.unbounded[F, RoutingMessage]
+      routingMessageQueue <- Channel.unbounded[F, RoutingMessage]
 
       // Block receiver, process incoming blocks and order by validated dependencies
       blockReceiverState <- {
@@ -196,7 +188,7 @@ object Setup {
           incomingBlockStream,
           validatedBlocksStream,
           conf.casper.shardName,
-          incomingBlocksQueue.enqueue1
+          incomingBlocksQueue.send(_).void
         )
       }
       // Blocks from receiver with fork-choice tips request on idle
@@ -273,8 +265,7 @@ object Setup {
       cacheTransactionAPI <- Transaction.cacheTransactionAPI(transactionAPI, storeManager)
 
       // Peer message stream
-      peerMessageStream = routingMessageQueue
-        .dequeueChunk(maxSize = 1)
+      peerMessageStream = routingMessageQueue.stream
         .parEvalMapUnorderedProcBounded {
           case RoutingMessage(peer, packet) =>
             toCasperMessageProto(packet).toEither
@@ -298,7 +289,7 @@ object Setup {
         implicit val br = blockRetriever
         for {
           _ <- BlockRetriever[F].requestAll(conf.casper.requestedBlocksTimeout)
-          _ <- Time[F].sleep(conf.casper.casperLoopInterval)
+          _ <- Temporal[F].sleep(conf.casper.casperLoopInterval)
         } yield ()
       }
 

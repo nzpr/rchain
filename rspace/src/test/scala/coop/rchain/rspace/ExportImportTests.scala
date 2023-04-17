@@ -1,7 +1,6 @@
 package coop.rchain.rspace
 
 import cats.effect.IO
-import cats.effect.concurrent.Ref
 import cats.syntax.all._
 import coop.rchain.metrics.{Metrics, NoopSpan, Span}
 import coop.rchain.rspace.examples.StringExamples.implicits._
@@ -18,7 +17,7 @@ import monix.execution.atomic.AtomicAny
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.bits.ByteVector
-import coop.rchain.shared.RChainScheduler._
+import cats.effect.Ref
 
 class ExportImportTests
     extends AnyFlatSpec
@@ -247,7 +246,7 @@ class ExportImportTests
 }
 
 trait InMemoryExportImportTestsBase[C, P, A, K] {
-  import SchedulerPools.global
+  import cats.effect.unsafe.implicits.global
   def fixture[S](
       f: (
           ISpace[IO, C, P, A, K],
@@ -287,8 +286,7 @@ trait InMemoryExportImportTestsBase[C, P, A, K] {
       }
       space1 = new RSpace[IO, C, P, A, K](
         historyRepository1,
-        store1,
-        rholangEC
+        store1
       )
       exporter1 <- historyRepository1.exporter
       importer1 <- historyRepository1.importer
@@ -309,8 +307,7 @@ trait InMemoryExportImportTestsBase[C, P, A, K] {
       }
       space2 = new RSpace[IO, C, P, A, K](
         historyRepository2,
-        store2,
-        rholangEC
+        store2
       )
       exporter2 <- historyRepository2.exporter
       importer2 <- historyRepository2.importer

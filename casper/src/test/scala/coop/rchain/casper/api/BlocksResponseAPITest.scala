@@ -1,7 +1,6 @@
 package coop.rchain.casper.api
 
 import cats.effect.{IO, Sync}
-import cats.effect.concurrent.Ref
 import cats.syntax.all._
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.dag._
@@ -20,7 +19,6 @@ import org.scalatest.EitherValues
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import cats.effect.testing.scalatest.AsyncIOSpec
-import coop.rchain.shared.RChainScheduler._
 
 import scala.collection.immutable.SortedMap
 
@@ -89,7 +87,6 @@ import scala.collection.immutable.SortedMap
 //           )
 //    } yield List(genesis, b2, b3, b4, b5, b6, b7, b8)
 //
-//  import coop.rchain.shared.RChainScheduler._
 //  "getBlocks" should "return all blocks" in {
 //    implicit val (blockStore, blockDagStorage, runtimeManager) = createMocks[IO]
 //

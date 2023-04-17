@@ -1,22 +1,22 @@
 package coop.rchain.comm.transport
 
-import cats.effect.{Concurrent, Sync}
+import cats.effect.{Async, Sync}
 import cats.syntax.all._
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.transport.PacketOps._
 import coop.rchain.shared.Log
 import fs2.Stream
-import fs2.concurrent.Queue
+import fs2.concurrent.Channel
 
 import scala.collection.concurrent.TrieMap
 
 final case class StreamMsgId(key: String, sender: PeerNode)
 
-class StreamObservableClass[F[_]: Concurrent: Log](
+class StreamObservableClass[F[_]: Async: Log](
     peer: PeerNode,
     bufferSize: Int,
     cache: TrieMap[String, Array[Byte]],
-    private val subject: Queue[F, StreamMsgId]
+    private val subject: Channel[F, StreamMsgId]
 ) {
 
   def enque(blob: Blob): F[Unit] = {
@@ -32,7 +32,15 @@ class StreamObservableClass[F[_]: Concurrent: Log](
         case Left(e)     => Log[F].error(e.message) >> none.pure[F]
       }
 
-    def push(key: String): F[Boolean] = subject.offer1(StreamMsgId(key, blob.sender))
+    def push(key: String): F[Boolean] =
+      subject
+        .trySend(StreamMsgId(key, blob.sender))
+        .flatMap(
+          _.leftTraverse(
+            _ => new Exception(s"Channel is closed when trying to send.").raiseError[F, Boolean]
+          ).map(_.merge)
+        )
+
     def propose(key: String): F[Unit] = {
       val processError = Log[F].warn(
         s"Client stream message queue for $peer is full (${bufferSize} items). Dropping message.)"
@@ -46,13 +54,13 @@ class StreamObservableClass[F[_]: Concurrent: Log](
 
 object StreamObservable {
   type StreamObservable[F[_]] = (Blob => F[Unit], Stream[F, StreamMsgId])
-  def apply[F[_]: Concurrent: Log](
+  def apply[F[_]: Async: Log](
       peer: PeerNode,
       bufferSize: Int,
       cache: TrieMap[String, Array[Byte]]
   ): F[StreamObservable[F]] =
-    Queue.bounded[F, StreamMsgId](bufferSize).map { q =>
+    Channel.bounded[F, StreamMsgId](bufferSize).map { q =>
       val x = new StreamObservableClass(peer, bufferSize, cache, q)
-      (x.enque, q.dequeueChunk(1))
+      (x.enque, q.stream)
     }
 }

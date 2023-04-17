@@ -1,6 +1,7 @@
 package coop.rchain.casper.protocol.client
 
-import cats.effect.{ConcurrentEffect, Sync}
+import cats.effect.{Async, Sync}
+import cats.effect.std.Dispatcher
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.protocol.propose.v1._
 import coop.rchain.models.either.implicits._
@@ -19,7 +20,7 @@ object ProposeService {
   def apply[F[_]](implicit ev: ProposeService[F]): ProposeService[F] = ev
 }
 
-class GrpcProposeService[F[_]: Sync: ConcurrentEffect](host: String, port: Int, maxMessageSize: Int)
+class GrpcProposeService[F[_]: Async](host: String, port: Int, maxMessageSize: Int)
     extends ProposeService[F]
     with Closeable {
 
@@ -30,23 +31,25 @@ class GrpcProposeService[F[_]: Sync: ConcurrentEffect](host: String, port: Int, 
       .usePlaintext()
       .build
 
-  private val stub = ProposeServiceFs2Grpc.stub(channel)
+  private val stub = Dispatcher.parallel[F].map(d => ProposeServiceFs2Grpc.stub(d, channel))
 
   def propose(isAsync: Boolean): F[Either[Seq[String], String]] =
-    stub
-      .propose(ProposeQuery(isAsync), new Metadata)
-      .toEitherF(
-        _.message.error,
-        _.message.result
-      )
+    stub.use(
+      _.propose(ProposeQuery(isAsync), new Metadata)
+        .toEitherF(
+          _.message.error,
+          _.message.result
+        )
+    )
 
   def proposeResult: F[Either[Seq[String], String]] =
-    stub
-      .proposeResult(ProposeResultQuery(), new Metadata)
-      .toEitherF(
-        _.message.error,
-        _.message.result
-      )
+    stub.use(
+      _.proposeResult(ProposeResultQuery(), new Metadata)
+        .toEitherF(
+          _.message.error,
+          _.message.result
+        )
+    )
 
   @SuppressWarnings(Array("org.wartremover.warts.NonUnitStatements"))
   override def close(): Unit = {

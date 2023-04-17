@@ -1,6 +1,7 @@
 package coop.rchain.casper.helper
 
-import cats.effect.{Concurrent, IO, Sync}
+import cats.effect.unsafe.implicits.global
+import cats.effect.{Async, IO, Resource, Sync}
 import cats.syntax.all._
 import coop.rchain.casper.genesis.Genesis
 import coop.rchain.casper.genesis.contracts.TestUtil
@@ -20,12 +21,12 @@ import coop.rchain.rholang.build.CompiledRholangSource
 import coop.rchain.rholang.interpreter.{PrettyPrinter, RhoRuntime, SystemProcesses}
 import coop.rchain.rspace.syntax._
 import coop.rchain.shared.Log
+import coop.rchain.store.{InMemoryStoreManager, KeyValueStoreManager}
 import org.scalatest.AppendedClues
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
-import coop.rchain.shared.RChainScheduler._
 
 class RhoSpec(
     testObject: CompiledRholangSource[_],
@@ -74,7 +75,7 @@ class RhoSpec(
 
   def hasFailures(assertions: List[RhoTestAssertion]) = assertions.find(_.isSuccess).isDefined
 
-  private def testFrameworkContracts[F[_]: Log: Concurrent: Span](
+  private def testFrameworkContracts[F[_]: Log: Async: Span](
       testResultCollector: TestResultCollector[F]
   ): Seq[SystemProcesses.Definition[F]] = {
     val testResultCollectorService =
@@ -144,7 +145,6 @@ class RhoSpec(
           RhoRuntime.createRuntime(
             _,
             BlockRandomSeed.nonNegativeMergeableTagName(shardId),
-            rholangEC,
             additionalSystemProcesses = testFrameworkContracts(testResultCollector)
           )
         )

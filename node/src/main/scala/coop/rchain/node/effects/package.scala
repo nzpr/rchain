@@ -1,7 +1,6 @@
 package coop.rchain.node
 
-import cats.effect.concurrent.{Deferred, Ref}
-import cats.effect.{Blocker, Concurrent, ConcurrentEffect, ContextShift, IO, Sync}
+import cats.effect.{Async, IO, Sync}
 import cats.mtl._
 import cats.syntax.all._
 import cats.{Applicative, Monad, Parallel}
@@ -12,15 +11,13 @@ import coop.rchain.comm.rp._
 import coop.rchain.comm.transport._
 import coop.rchain.metrics.Metrics
 import coop.rchain.shared._
-import monix.eval._
-import monix.execution._
 
 import java.nio.file.Path
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.io.Source
 import scala.tools.jline.console._
 import scala.util.Using
+import cats.effect.{Deferred, Ref}
 
 package object effects {
 
@@ -32,14 +29,13 @@ package object effects {
   def nodeDiscovery[F[_]: Monad: KademliaStore: KademliaRPC](id: NodeIdentifier): NodeDiscovery[F] =
     NodeDiscovery.kademlia(id)
 
-  def kademliaRPC[F[_]: Sync: ConcurrentEffect: RPConfAsk: Metrics](
+  def kademliaRPC[F[_]: Async: RPConfAsk: Metrics](
       networkId: String,
-      timeout: FiniteDuration,
-      grpcEC: ExecutionContext
+      timeout: FiniteDuration
   ): KademliaRPC[F] =
-    new GrpcKademliaRPC(networkId, timeout, grpcEC)
+    new GrpcKademliaRPC(networkId, timeout)
 
-  def transportClient[F[_]: Concurrent: ContextShift: ConcurrentEffect: Parallel: Log: Metrics](
+  def transportClient[F[_]: Async: Parallel: Log: Metrics](
       networkId: String,
       certPath: Path,
       keyPath: Path,
@@ -63,7 +59,7 @@ package object effects {
   def consoleIO[F[_]: Sync](consoleReader: ConsoleReader): ConsoleIO[F] =
     new JLineConsoleIO(consoleReader)
 
-  def rpConnections[F[_]: Concurrent]: F[ConnectionsCell[F]] =
+  def rpConnections[F[_]: Async]: F[ConnectionsCell[F]] =
     Ref[F].of(Connections.empty)
 
   def rpConfState[F[_]: Sync](conf: RPConf): F[Ref[F, RPConf]] = Ref.of(conf)

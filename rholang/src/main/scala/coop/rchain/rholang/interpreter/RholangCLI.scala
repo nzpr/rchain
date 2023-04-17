@@ -1,7 +1,8 @@
 package coop.rchain.rholang.interpreter
 
 import cats._
-import cats.effect.{Blocker, Concurrent, ContextShift, IO, Sync}
+import cats.effect.unsafe.implicits.global
+import cats.effect.{Async, IO, Sync}
 import cats.syntax.all._
 import coop.rchain.metrics.{Metrics, NoopSpan, Span}
 import coop.rchain.models._
@@ -12,10 +13,8 @@ import coop.rchain.rholang.interpreter.storage.StoragePrinter
 import coop.rchain.rholang.syntax._
 import coop.rchain.rspace.syntax._
 import coop.rchain.shared.Log
-import coop.rchain.shared.RChainScheduler.rholangEC
 import coop.rchain.store.LmdbDirStoreManager.{mb, Db, LmdbEnvConfig}
 import coop.rchain.store.{KeyValueStoreManager, LmdbDirStoreManager}
-import monix.execution.{CancelableFuture, Scheduler}
 import org.rogach.scallop.{stringListConverter, ScallopConf}
 
 import java.io.{BufferedOutputStream, FileOutputStream, FileReader, IOException}
@@ -57,21 +56,19 @@ object RholangCLI {
   }
 
   def main(args: Array[String]): Unit = {
-    import scala.concurrent.ExecutionContext.Implicits.global
-    implicit val cs: ContextShift[IO] = IO.contextShift(global)
 
     val conf = new Conf(args.toList)
 
     implicit val log: Log[IO]          = Log.log[IO]
     implicit val metricsF: Metrics[IO] = new Metrics.MetricsNOP[IO]()
     implicit val spanF: Span[IO]       = NoopSpan[IO]()
-    implicit val parF: Parallel[IO]    = IO.ioParallel
+    implicit val parF: Parallel[IO]    = IO.parallelForIO
 
     val kvm = mkRSpaceStoreManager[IO](conf.dataDir(), conf.mapSize()).unsafeRunSync
 
     val runtime = (for {
       store   <- kvm.rSpaceStores
-      runtime <- RhoRuntime.createRuntime[IO](store, Par(), rholangEC)
+      runtime <- RhoRuntime.createRuntime[IO](store, Par())
     } yield runtime).unsafeRunSync
 
     val problems = try {
@@ -110,7 +107,7 @@ object RholangCLI {
     }
   }
 
-  def mkRSpaceStoreManager[F[_]: Concurrent: Log](
+  def mkRSpaceStoreManager[F[_]: Async: Log](
       dirPath: Path,
       mapSize: Long = 100 * mb
   ): F[KeyValueStoreManager[F]] = {

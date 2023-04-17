@@ -1,6 +1,6 @@
 package coop.rchain.rspace.examples
 
-import cats.effect.{Concurrent, ContextShift, IO}
+import cats.effect.{Async, IO}
 import cats.{Applicative, Id}
 import coop.rchain.metrics.{Metrics, NoopSpan, Span}
 import coop.rchain.rspace.syntax.rspaceSyntaxKeyValueStoreManager
@@ -17,7 +17,6 @@ import scala.concurrent.ExecutionContext
 
 @SuppressWarnings(Array("org.wartremover.warts.EitherProjectionPartial"))
 object AddressBookExample {
-  import coop.rchain.shared.RChainScheduler._
 
   /* Here we define a type for channels */
 
@@ -80,16 +79,6 @@ object AddressBookExample {
   }
 
   object implicits {
-
-    implicit val concurrentF: Concurrent[Id] = coop.rchain.catscontrib.effect.implicits.concurrentId
-
-    implicit val contextShiftId: ContextShift[Id] =
-      new ContextShift[Id] {
-        def shift: Id[Unit]                                   = ???
-        def evalOn[A](ec: ExecutionContext)(fa: Id[A]): Id[A] = fa
-      }
-
-    /* Now I will troll Greg... */
 
     /* Serialize instances */
 
@@ -194,15 +183,17 @@ object AddressBookExample {
     phone = "232-555-1212"
   )
 
+  import coop.rchain.catscontrib.effect.implicits._
+
   def exampleOne(): Unit = {
-    implicit val log: Log[Id]          = Log.log
+    implicit val log: Log[Id]          = Log.log[Id]
     implicit val metricsF: Metrics[Id] = new Metrics.MetricsNOP[Id]()
     implicit val spanF: Span[Id]       = NoopSpan[Id]()
     implicit val keyValueStoreManager  = InMemoryStoreManager[Id]
 
     // Let's define our store
     val store = keyValueStoreManager.rSpaceStores
-    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store, rholangEC)
+    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store)
 
     Console.printf("\nExample One: Let's consume and then produce...\n")
 
@@ -237,7 +228,7 @@ object AddressBookExample {
 
     // Let's define our store
     val store = keyValueStoreManager.rSpaceStores
-    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store, rholangEC)
+    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store)
 
     Console.printf("\nExample Two: Let's produce and then consume...\n")
 
@@ -324,7 +315,7 @@ object AddressBookExample {
 
     // Let's define our store
     val store = keyValueStoreManager.rSpaceStores
-    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store, rholangEC)
+    val space = RSpace.create[Id, Channel, Pattern, Entry, Printer](store)
     try {
       f(space)
     } finally {

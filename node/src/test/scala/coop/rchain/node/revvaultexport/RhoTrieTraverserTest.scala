@@ -1,6 +1,7 @@
 package coop.rchain.node.revvaultexport
 
-import cats.effect.{Concurrent, IO}
+import cats.effect.unsafe.implicits.global
+import cats.effect.{Async, IO}
 import coop.rchain.casper.genesis.contracts.{Registry, StandardDeploys}
 import coop.rchain.casper.helper.TestNode.Effect
 import coop.rchain.casper.helper.TestRhoRuntime.rhoRuntimeEff
@@ -19,7 +20,6 @@ import scala.util.Random
 class RhoTrieTraverserTest extends AnyFlatSpec {
   private val SHARD_ID = "root-shard"
   private val registry = Registry(GenesisBuilder.defaultSystemContractPubKey)
-  import coop.rchain.shared.RChainScheduler._
 
   "traverse the TreeHashMap" should "work" in {
     val total     = 100
@@ -58,7 +58,7 @@ class RhoTrieTraverserTest extends AnyFlatSpec {
                                |  }
                                |}""".stripMargin
 
-    implicit val concurrent                  = Concurrent[IO]
+    implicit val concurrent                  = Async[IO]
     implicit val metricsEff: Metrics[Effect] = new Metrics.MetricsNOP[IO]
     implicit val noopSpan: Span[Effect]      = NoopSpan[IO]()
     implicit val logger: Log[Effect]         = Log.log[IO]

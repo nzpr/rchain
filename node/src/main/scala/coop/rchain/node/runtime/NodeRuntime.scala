@@ -1,8 +1,7 @@
 package coop.rchain.node.runtime
 
 import cats.Parallel
-import cats.effect.{ConcurrentEffect, ContextShift, Resource, Sync, Timer}
-import cats.effect.concurrent.Ref
+import cats.effect.{Async, Ref, Resource, Sync, Temporal}
 import cats.mtl._
 import cats.syntax.all._
 import com.typesafe.config.Config
@@ -21,20 +20,15 @@ import coop.rchain.node.{diagnostics, effects}
 import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import fs2.Stream
-import monix.execution.Scheduler
-
-import java.util.concurrent.{Executors, ThreadFactory}
-import java.util.concurrent.atomic.AtomicLong
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 object NodeRuntime {
   type LocalEnvironment[F[_]] = ApplicativeLocal[F, NodeCallCtx]
 
-  def start[F[_]: ConcurrentEffect: Parallel: ContextShift: Timer: Log](
+  def start[F[_]: Async: Parallel: Log](
       nodeConf: NodeConf,
       kamonConf: Config
-  )(implicit mainEC: ExecutionContext): F[Unit] = {
+  ): F[Unit] = {
 
     val nodeCallCtxReader: NodeCallCtxReader[F] = NodeCallCtxReader[F]()
     import nodeCallCtxReader._
@@ -44,8 +38,7 @@ object NodeRuntime {
       * although they can be generated with cats.tagless @autoFunctorK macros but support is missing for IntelliJ.
       * https://github.com/typelevel/cats-tagless/issues/60 (Cheers, Marcin!!)
       */
-    implicit val lg: Log[ReaderNodeCallCtx]   = Log[F].mapK(effToEnv)
-    implicit val tm: Timer[ReaderNodeCallCtx] = Timer[F].mapK(effToEnv)
+    implicit val lg: Log[ReaderNodeCallCtx] = Log[F].mapK(effToEnv)
 
     for {
       id <- NodeEnvironment.create[F](nodeConf)
@@ -75,28 +68,11 @@ object NodeRuntime {
     } yield ()
 }
 
-class NodeRuntime[F[_]: ConcurrentEffect: Parallel: Timer: ContextShift: LocalEnvironment: Log] private[node] (
+class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
     nodeConf: NodeConf,
     kamonConf: Config,
     id: NodeIdentifier
-)(implicit mainEC: ExecutionContext) {
-
-  // TODO: revise use of schedulers for gRPC
-  private[this] val grpcEC = mainEC
-
-  val ioScheduler = Executors.newCachedThreadPool(new ThreadFactory {
-    private val counter = new AtomicLong(0L)
-
-    def newThread(r: Runnable) = {
-      val th = new Thread(r)
-      th.setName(
-        "io-thread-" +
-          counter.getAndIncrement.toString
-      )
-      th.setDaemon(true)
-      th
-    }
-  })
+) {
 
   implicit private val logSource: LogSource = LogSource(this.getClass)
 
@@ -156,8 +132,7 @@ class NodeRuntime[F[_]: ConcurrentEffect: Parallel: Timer: ContextShift: LocalEn
         implicit val (p, m) = (rpConfAsk, metrics)
         effects.kademliaRPC(
           nodeConf.protocolServer.networkId,
-          nodeConf.protocolClient.networkTimeout,
-          grpcEC
+          nodeConf.protocolClient.networkTimeout
         )
       }
 
@@ -178,7 +153,7 @@ class NodeRuntime[F[_]: ConcurrentEffect: Parallel: Timer: ContextShift: LocalEn
         for {
           _ <- NodeDiscovery[F].discover
           _ <- Connect.findAndConnect[F](Connect.connect[F])
-          _ <- Timer[F].sleep(20.seconds)
+          _ <- Temporal[F].sleep(20.seconds)
         } yield ()
       }
 
@@ -190,7 +165,7 @@ class NodeRuntime[F[_]: ConcurrentEffect: Parallel: Timer: ContextShift: LocalEn
         for {
           _ <- dynamicIpCheck(nodeConf).whenA(nodeConf.protocolServer.dynamicIp)
           _ <- Connect.clearConnections[F]
-          _ <- Timer[F].sleep(10.minutes)
+          _ <- Temporal[F].sleep(10.minutes)
         } yield ()
       }
 
@@ -225,8 +200,7 @@ class NodeRuntime[F[_]: ConcurrentEffect: Parallel: Timer: ContextShift: LocalEn
                 adminWebApi,
                 reportRoutes,
                 nodeConf,
-                kamonConf,
-                grpcEC
+                kamonConf
               )
           // Return node launch stream
         } yield nodeLaunch

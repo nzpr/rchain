@@ -54,6 +54,7 @@ lazy val projectSettings = Seq(
   ),
   scalafmtOnCompile := !sys.env.contains("CI"), // disable in CI environments
   ThisBuild / scapegoatVersion := "1.4.11",
+  ThisBuild / scalacOptions += "semanticdb:synthetics:on",
   Test / testOptions += Tests.Argument("-oD"), //output test durations
   javacOptions ++= Seq("-source", "11", "-target", "11"),
   Test / fork := true,
@@ -300,8 +301,8 @@ lazy val node = (project in file("node"))
         scalapbRuntimegGrpc,
         circeParser,
         circeGenericExtras,
-        pureconfig,
-        monix // remove when BatchInfluxDBReporter is adjusted to work w/o monix
+        monix, // remove when BatchInfluxDBReporter is adjusted to work w/o monix
+        pureconfig
       ),
     buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion, git.gitHeadCommit),
     buildInfoPackage := "coop.rchain.node",

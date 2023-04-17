@@ -1,14 +1,13 @@
 package coop.rchain.casper.util
 
-import cats.effect.{Blocker, ContextShift, Sync}
+import cats.effect.{Async, Resource, Sync}
 import cats.syntax.all._
 import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.Secp256k1
 import coop.rchain.shared.{Base16, Log}
 import coop.rchain.models.syntax._
+import fs2.io.file.{Files, Path}
 import fs2.{io, text, Pipe, Stream}
-
-import java.nio.file.Path
 
 object BondsParser {
 
@@ -19,11 +18,11 @@ object BondsParser {
     *   Cats Effect 3 removed ContextShift and Blocker.
     *     - https://typelevel.org/cats-effect/docs/migration-guide#blocker
     */
-  def parse[F[_]: Sync: ContextShift: Log](bondsPath: Path): F[Map[PublicKey, Long]] = {
-    def readLines(blocker: Blocker) =
-      io.file
-        .readAll[F](bondsPath, blocker, chunkSize = 4096)
-        .through(text.utf8Decode)
+  def parse[F[_]: Async: Log](bondsPath: Path): F[Map[PublicKey, Long]] = {
+    def readLines =
+      Files[F]
+        .readAll(bondsPath)
+        .through(text.utf8.decode)
         .through(text.lines)
         .filter(_.trim.nonEmpty)
         .evalMap { line =>
@@ -58,72 +57,70 @@ object BondsParser {
           case ex: Throwable =>
             new Exception(s"FAILED PARSING BONDS FILE: $bondsPath\n$ex")
         }
-    Blocker[F].use(readLines)
+    Resource.unit[F].use(_ => readLines)
   }
 
-  def parse[F[_]: Sync: ContextShift: Log](
+  def parse[F[_]: Async: Log](
       bondsPathStr: String,
       autogenShardSize: Int
   ): F[Map[PublicKey, Long]] = {
-    val bondsPath = Path.of(bondsPathStr)
+    val bondsPath = Path(bondsPathStr)
 
-    def readLines(blocker: Blocker) =
-      io.file
-        .exists(blocker, bondsPath)
+    def readLines =
+      Files[F]
+        .exists(bondsPath)
         .ifM(
           Log[F].info(s"Parsing bonds file $bondsPath.") >> parse(bondsPath),
           Log[F].warn(s"BONDS FILE NOT FOUND: $bondsPath. Creating file with random bonds.") >>
-            newValidators[F](autogenShardSize, bondsPath.toAbsolutePath)
+            newValidators[F](autogenShardSize, bondsPath.absolute)
         )
-    Blocker[F].use(readLines)
+    Resource.unit[F].use(_ => readLines)
   }
 
-  private def newValidators[F[_]: Sync: ContextShift: Log](
+  private def newValidators[F[_]: Async: Log](
       autogenShardSize: Int,
       bondsFilePath: Path
   ): F[Map[PublicKey, Long]] = {
-    val genesisFolder = bondsFilePath.getParent
+    val genesisFolder = bondsFilePath.parent.get
 
     // Generate private/public key pairs
     val keys         = Vector.fill(autogenShardSize)(Secp256k1.newKeyPair)
     val (_, pubKeys) = keys.unzip
     val bonds        = pubKeys.iterator.zipWithIndex.toMap.mapValues(_.toLong + 1L)
 
-    def toFile(filePath: Path, blocker: Blocker): Pipe[F, String, Unit] =
-      _.through(text.utf8Encode).through(io.file.writeAll(filePath, blocker))
+    def toFile(filePath: Path): Pipe[F, String, Unit] =
+      _.through(text.utf8.encode).through(Files[F].writeAll(filePath))
 
     // Write generated `<public_key>.sk` files with private key as content
-    def writeSkFiles(blocker: Blocker) =
+    def writeSkFiles =
       Stream
-        .fromIterator(keys.iterator)
+        .fromIterator(keys.iterator, 1)
         .flatMap {
           case (privateKey, publicKey) =>
             val sk     = Base16.encode(privateKey.bytes)
             val pk     = Base16.encode(publicKey.bytes)
             val skFile = genesisFolder.resolve(s"$pk.sk")
-            toFile(skFile, blocker)(Stream.emit(sk))
+            toFile(skFile)(Stream.emit(sk))
         }
         .compile
         .drain
 
     // Create bonds file with generated public keys
-    def writeBondsFile(blocker: Blocker) = {
+    def writeBondsFile = {
       val br = System.lineSeparator()
       val bondsStream = Stream
-        .fromIterator(bonds.iterator)
+        .fromIterator(bonds.iterator, 1)
         .evalMap {
           case (publicKey, stake) =>
             val pk = Base16.encode(publicKey.bytes)
             Log[F].info(s"Bond generated $pk => $stake") *> s"$pk $stake$br".pure
         }
-      toFile(bondsFilePath, blocker)(bondsStream).compile.drain
+      toFile(bondsFilePath)(bondsStream).compile.drain
     }
 
-    // Write .sk files and bonds file
-    Blocker[F].use { blocker =>
-      io.file.createDirectories(blocker, genesisFolder) *>
-        writeSkFiles(blocker) *> writeBondsFile(blocker) *> bonds.pure[F]
-    }
+    Files[F].createDirectories(genesisFolder) *>
+      writeSkFiles *> writeBondsFile *> bonds.pure[F]
+
   }
 
   private def tryWithMsg[F[_]: Sync, A](f: => A)(failMsg: => String) =

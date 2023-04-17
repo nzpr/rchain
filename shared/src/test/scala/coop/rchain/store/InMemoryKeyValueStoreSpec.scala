@@ -1,5 +1,6 @@
 package coop.rchain.store
 
+import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Sync}
 import cats.syntax.all._
 import coop.rchain.shared.syntax._
@@ -50,7 +51,6 @@ class InMemoryKeyValueStoreSpec
     extends AnyFlatSpec
     with Matchers
     with ScalaCheckDrivenPropertyChecks {
-  implicit val scheduler = monix.execution.Scheduler.global
 
   def genData: Gen[Map[Long, String]] = {
     val arbKV = Arbitrary.arbitrary[(Long, String)]

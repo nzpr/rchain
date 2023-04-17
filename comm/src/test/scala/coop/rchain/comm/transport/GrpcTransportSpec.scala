@@ -1,6 +1,7 @@
 package coop.rchain.comm.transport
 
-import cats.effect.{ContextShift, IO}
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import com.google.protobuf.ByteString
 import coop.rchain.comm.CommError._
 import coop.rchain.comm._
@@ -9,8 +10,6 @@ import coop.rchain.comm.protocol.routing._
 import coop.rchain.comm.rp.ProtocolHelper
 import coop.rchain.metrics.Metrics
 import io.grpc.{Metadata, Status, StatusRuntimeException}
-import monix.execution.Scheduler
-import monix.reactive.Observable
 import org.scalatest._
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -20,7 +19,6 @@ import scala.util.Random
 
 class GrpcTransportSpec extends AnyWordSpecLike with Matchers with Inside {
 
-  import coop.rchain.shared.RChainScheduler._
   implicit val metrics: Metrics[IO] = new Metrics.MetricsNOP
   private val networkId             = "test"
   private val peerLocal             = createPeerNode

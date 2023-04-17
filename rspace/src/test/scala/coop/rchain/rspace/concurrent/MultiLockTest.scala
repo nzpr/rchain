@@ -1,5 +1,6 @@
 package coop.rchain.rspace.concurrent
 
+import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Sync}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -8,12 +9,9 @@ import scala.collection._
 import scala.collection.immutable.Seq
 import coop.rchain.metrics
 import coop.rchain.metrics.Metrics
-import coop.rchain.shared.RChainScheduler._
 
 class MultiLockTest extends AnyFlatSpec with Matchers {
 
-  import monix.execution.Scheduler
-  implicit val s       = Scheduler.fixedPool("test-scheduler", 8)
   implicit val metrics = new Metrics.MetricsNOP[IO]
 
   implicit class TaskOps[A](task: IO[A]) {
@@ -87,7 +85,7 @@ class MultiLockTest extends AnyFlatSpec with Matchers {
   }
 
   "FunctionalMultiLock" should "not allow concurrent modifications of same keys" in {
-    import cats.effect.{Concurrent, ContextShift, IO}
+    import cats.effect.{Async, IO}
     import cats.implicits._
 
     implicit val metrics: Metrics.MetricsNOP[IO] = new Metrics.MetricsNOP[IO]

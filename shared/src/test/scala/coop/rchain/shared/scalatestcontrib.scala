@@ -1,9 +1,9 @@
 package coop.rchain.shared
 
 import cats.Functor
-import cats.effect.{ContextShift, IO}
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import cats.syntax.functor._
-import monix.execution.Scheduler
 import org.scalatest.Assertion
 import org.scalatest.matchers.should.Matchers
 

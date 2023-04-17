@@ -1,6 +1,6 @@
 package coop.rchain.node.diagnostics
 
-import cats.effect.{ExitCase, Sync}
+import cats.effect.{Outcome, Sync}
 import cats.syntax.all._
 import cats.mtl.ApplicativeLocal
 import coop.rchain.metrics.Metrics.Source
@@ -8,7 +8,6 @@ import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.node.runtime.NodeCallCtx
 import kamon.Kamon
 import kamon.trace.{Span => KSpan}
-import monix.execution.atomic.AtomicLong
 
 import scala.collection.concurrent.TrieMap
 
@@ -52,8 +51,8 @@ object Trace {
 
   def source(s: Source, networkId: String, host: String): Trace = SourceTrace(s, networkId, host)
 
+  private val counter = new java.util.concurrent.atomic.AtomicLong(0)
   def next: TraceId   = TraceId(counter.incrementAndGet())
-  private val counter = AtomicLong(0L)
 
   final case class TraceId(id: Long) extends AnyVal
 }
@@ -104,9 +103,9 @@ package object effects {
         Sync[F].bracketCase(
           mark(s"started-$label")
         )(_ => block) {
-          case (_, ExitCase.Completed) => mark(s"finished-$label")
-          case (_, ExitCase.Error(_))  => mark(s"failed-$label")
-          case (_, ExitCase.Canceled)  => mark(s"cancelled-$label")
+          case (_, Outcome.Succeeded(_)) => mark(s"finished-$label")
+          case (_, Outcome.Errored(_))   => mark(s"failed-$label")
+          case (_, Outcome.Canceled())   => mark(s"cancelled-$label")
         }
     }
 

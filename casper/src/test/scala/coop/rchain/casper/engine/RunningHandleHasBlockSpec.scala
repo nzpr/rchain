@@ -1,7 +1,6 @@
 package coop.rchain.casper.engine
 
 import cats.effect.IO
-import cats.effect.concurrent.Ref
 import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.casper.blocks.BlockRetriever
@@ -26,9 +25,10 @@ import coop.rchain.shared.Log
 import org.scalatest._
 import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
+import cats.effect.Ref
+import cats.effect.unsafe.implicits.global
 
 class RunningHandleHasBlockSpec extends AnyFunSpec with BeforeAndAfterEach with Matchers {
-  import coop.rchain.shared.RChainScheduler._
 
   val local: PeerNode = peerNode("src", 40400)
 

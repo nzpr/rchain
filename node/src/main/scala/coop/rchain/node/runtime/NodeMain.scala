@@ -1,7 +1,7 @@
 package coop.rchain.node.runtime
 
 import cats.Parallel
-import cats.effect.{ConcurrentEffect, ContextShift, Resource, Sync, Timer}
+import cats.effect.{Async, Resource, Sync, Temporal}
 import cats.syntax.all._
 import coop.rchain.casper.protocol.client.{DeployRuntime, GrpcDeployService, GrpcProposeService}
 import coop.rchain.crypto.PrivateKey
@@ -14,8 +14,7 @@ import coop.rchain.node.effects
 import coop.rchain.node.effects.{ConsoleIO, GrpcReplClient}
 import coop.rchain.node.web.VersionInfo
 import coop.rchain.shared.StringOps.StringColors
-import coop.rchain.shared.{Log, TerminalMode, Time}
-import monix.execution.Scheduler
+import coop.rchain.shared.{Log, TerminalMode}
 import org.slf4j.bridge.SLF4JBridgeHandler
 
 import java.io.File
@@ -26,14 +25,12 @@ import scala.tools.jline.console.completer.StringsCompleter
 
 object NodeMain {
 
-  import coop.rchain.shared.RChainScheduler.mainEC // main execution context
-
   /**
     * Starts RNode instance
     *
     * @param options command line options
     */
-  def startNode[F[_]: ConcurrentEffect: Parallel: ContextShift: Timer: ConsoleIO: Log](
+  def startNode[F[_]: Parallel: Async: ConsoleIO: Log](
       options: commandline.Options
   ): F[Unit] = Sync[F].defer {
     // Create merged configuration from CLI options and config file
@@ -86,7 +83,7 @@ object NodeMain {
     * @param options command line options
     * @param console console
     */
-  def runCLI[F[_]: Sync: ConcurrentEffect: ConsoleIO: Timer](
+  def runCLI[F[_]: Async: ConsoleIO](
       options: commandline.Options
   ): F[Unit] = {
     val grpcPort =
@@ -111,8 +108,6 @@ object NodeMain {
         grpcPort,
         options.grpcMaxRecvMessageSize()
       )
-
-    implicit val time: Time[F] = Time.fromTimer
 
     val program = subcommand(options) match {
       case Eval(files, printUnmatchedSendsOnly) =>

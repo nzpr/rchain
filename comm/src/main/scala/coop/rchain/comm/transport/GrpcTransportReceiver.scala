@@ -1,7 +1,7 @@
 package coop.rchain.comm.transport
 
-import cats.effect.concurrent.{Deferred, Ref}
-import cats.effect.{Concurrent, ConcurrentEffect, ContextShift, Resource, Sync, Timer}
+import cats.effect.std.Dispatcher
+import cats.effect.{Async, Resource, Sync}
 import cats.syntax.all._
 import cats.effect.syntax.all._
 import coop.rchain.comm.protocol.routing._
@@ -13,7 +13,7 @@ import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import fs2.Stream
 import io.grpc.{Metadata, Server}
-import fs2.concurrent.Queue
+import fs2.concurrent.Channel
 import io.grpc.netty.NettyServerBuilder
 import io.netty.handler.ssl.SslContext
 import io.netty.internal.tcnative.AsyncTask
@@ -21,6 +21,7 @@ import io.netty.internal.tcnative.AsyncTask
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.DurationInt
+import cats.effect.{Deferred, Ref, Temporal}
 
 object GrpcTransportReceiver {
 
@@ -30,7 +31,7 @@ object GrpcTransportReceiver {
   type MessageBuffers[F[_]]  = (Send => F[Boolean], StreamMessage => F[Boolean], Stream[F, Unit])
   type MessageHandlers[F[_]] = (Send => F[Unit], StreamMessage => F[Unit])
 
-  def create[F[_]: Concurrent: ConcurrentEffect: RPConfAsk: Log: Metrics: Timer](
+  def create[F[_]: Async: RPConfAsk: Log: Metrics](
       networkId: String,
       port: Int,
       serverSslContext: SslContext,
@@ -54,15 +55,14 @@ object GrpcTransportReceiver {
       private def getBuffers(peer: PeerNode): F[MessageBuffers[F]] = {
         def createBuffers(clear: F[Unit]): F[MessageBuffers[F]] =
           for {
-            tellBuffer <- Queue.bounded[F, Send](64)
-            blobBuffer <- Queue.bounded[F, StreamMessage](8)
-            stream = tellBuffer
-              .dequeueChunk(1)
+            tellBuffer <- Channel.bounded[F, Send](64)
+            blobBuffer <- Channel.bounded[F, StreamMessage](8)
+            stream = tellBuffer.stream
               .parEvalMapUnordered(parallelism)(messageHandlers._1(_)) concurrently
-              blobBuffer.dequeueChunk(1).parEvalMapUnordered(parallelism)(messageHandlers._2(_))
+              blobBuffer.stream.parEvalMapUnordered(parallelism)(messageHandlers._2(_))
             // inbound queue lives for 10 minutes TODO synchronize with Kademlia table cleanup
             s = (Stream.fixedDelay(10.minutes) ++ Stream.eval(clear)) concurrently stream
-            _ <- Concurrent[F]
+            _ <- Sync[F]
                   .start(s.compile.drain)
                   .onError {
                     case err =>
@@ -75,7 +75,25 @@ object GrpcTransportReceiver {
                       s"Inbound gRPC channel with ${peer.toAddress} closed because fiber has been cancelled."
                     )
                   )
-          } yield (tellBuffer.offer1 _, blobBuffer.offer1 _, stream)
+          } yield (
+            (x: Send) =>
+              tellBuffer
+                .trySend(x)
+                .flatMap(
+                  _.leftTraverse(
+                    _ => new Exception("Send channel is closed").raiseError[F, Boolean]
+                  ).map(_.merge)
+                ),
+            (x: StreamMessage) =>
+              blobBuffer
+                .trySend(x)
+                .flatMap(
+                  _.leftTraverse(
+                    _ => new Exception("Stream channel is closed").raiseError[F, Boolean]
+                  ).map(_.merge)
+                ),
+            stream
+          )
 
         for {
           bDefNew <- Deferred[F, MessageBuffers[F]]
@@ -161,18 +179,19 @@ object GrpcTransportReceiver {
         )
     }
 
-    import coop.rchain.shared.RChainScheduler.mainEC
-    val server = NettyServerBuilder
-      .forPort(port)
-      .executor(mainEC.execute)
-      .maxInboundMessageSize(maxMessageSize)
-      .sslContext(serverSslContext)
-      .addService(TransportLayerFs2Grpc.bindService(service))
-      .intercept(new SslSessionServerInterceptor(networkId))
-      .build
+    Dispatcher.parallel[F].flatMap { d =>
+      val startF = Sync[F].delay(
+        NettyServerBuilder
+          .forPort(port)
+          .maxInboundMessageSize(maxMessageSize)
+          .sslContext(serverSslContext)
+          .addService(TransportLayerFs2Grpc.bindService(d, service))
+          .intercept(new SslSessionServerInterceptor(networkId, d))
+          .build
+          .start
+      )
+      Resource.make(startF)(server => Sync[F].delay(server.shutdown().awaitTermination())).void
+    }
 
-    val startF = Sync[F].delay(server.start())
-    val stopF  = Sync[F].delay(server.shutdown().awaitTermination())
-    Resource.make(startF)(_ => stopF).map(_ => ())
   }
 }

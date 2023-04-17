@@ -1,6 +1,8 @@
 package coop.rchain.node.effects
 
-import cats.effect.{ConcurrentEffect, Sync}
+import cats.effect.Sync
+import cats.effect.kernel.Async
+import cats.effect.std.Dispatcher
 import cats.syntax.all._
 import coop.rchain.node.model._
 import io.grpc.netty.NettyChannelBuilder
@@ -24,7 +26,7 @@ object ReplClient {
   def apply[F[_]](implicit ev: ReplClient[F]): ReplClient[F] = ev
 }
 
-class GrpcReplClient[F[_]: Sync: ConcurrentEffect](host: String, port: Int, maxMessageSize: Int)
+class GrpcReplClient[F[_]: Async](host: String, port: Int, maxMessageSize: Int)
     extends ReplClient[F]
     with Closeable {
 
@@ -35,14 +37,15 @@ class GrpcReplClient[F[_]: Sync: ConcurrentEffect](host: String, port: Int, maxM
       .usePlaintext()
       .build
 
-  private val stub = ReplFs2Grpc.stub(channel)
+  private val stub = Dispatcher.parallel[F].map(ReplFs2Grpc.stub(_, channel))
 
   def run(line: String): F[Either[Throwable, String]] =
-    stub
-      .run(CmdRequest(line), new Metadata())
-      .map(_.output)
-      .attempt
-      .map(_.leftMap(processError))
+    stub.use(
+      _.run(CmdRequest(line), new Metadata())
+        .map(_.output)
+        .attempt
+        .map(_.leftMap(processError))
+    )
 
   def eval(
       fileNames: List[String],
@@ -53,11 +56,12 @@ class GrpcReplClient[F[_]: Sync: ConcurrentEffect](host: String, port: Int, maxM
   def eval(fileName: String, printUnmatchedSendsOnly: Boolean): F[Either[Throwable, String]] = {
     val filePath = Paths.get(fileName)
     if (Files.exists(filePath))
-      stub
-        .eval(EvalRequest(readContent(filePath), printUnmatchedSendsOnly), new Metadata())
-        .map(_.output)
-        .attempt
-        .map(_.leftMap(processError))
+      stub.use(
+        _.eval(EvalRequest(readContent(filePath), printUnmatchedSendsOnly), new Metadata())
+          .map(_.output)
+          .attempt
+          .map(_.leftMap(processError))
+      )
     else Sync[F].delay(new FileNotFoundException("File not found").asLeft)
   }
 
