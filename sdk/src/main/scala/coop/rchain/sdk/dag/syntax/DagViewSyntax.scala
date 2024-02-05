@@ -3,6 +3,7 @@ package coop.rchain.sdk.dag.syntax
 import cats.Applicative
 import cats.syntax.all._
 import coop.rchain.sdk.dag.data.DagView
+import coop.rchain.sdk.dag.syntax.all._
 import fs2.Stream
 
 /**

@@ -4,7 +4,7 @@ import cats.Applicative
 import cats.effect.Sync
 import cats.syntax.all._
 import coop.rchain.sdk.dag.data.DagView
-import coop.rchain.sdk.dag.syntax._
+import coop.rchain.sdk.dag.syntax.all._
 
 /**
   * Casper specific extensions for DagView operations.

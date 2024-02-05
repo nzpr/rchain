@@ -1,7 +1,5 @@
 package coop.rchain
 
-package object catscontrib
-    extends EitherTSyntax
-    with StateTInstances
-    with WriterTInstances
-    with SeqInstances
+package object catscontrib {
+  object all extends EitherTSyntax with StateTInstances with WriterTInstances with SeqInstances
+}

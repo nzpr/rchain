@@ -1,7 +1,7 @@
 package coop.rchain.sdk.casper.syntax
 
 import coop.rchain.sdk.dag.data.DagData
-import coop.rchain.sdk.dag.syntax._
+import coop.rchain.sdk.dag.syntax.all._
 
 /**
   * Casper specific extensions for DagData operations.
