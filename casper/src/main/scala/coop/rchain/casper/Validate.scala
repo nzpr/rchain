@@ -316,22 +316,15 @@ object Validate {
   ): F[Option[Boolean]] =
     for {
       msgMap <- BlockDagStorage[F].getRepresentation.map(_.dagMessageState.msgMap)
-//      justifications = b.justifications.map(msgMap)
     } yield for {
-      // TODO: temporary don't expect that all justifications are available in msgMap to satisfy the failing tests
-      //  - with multi-parent finalizer all messages should be available
-      justifications <- b.justifications.map(msgMap.get).sequence
-      prevMsg        <- justifications.find(_.sender == b.sender)
-      res = justifications.forall { just =>
-        val justPrevMsgOpt = prevMsg.parents.map(msgMap).find(_.sender == just.sender)
-        justPrevMsgOpt.forall { justPrevMsg =>
-          // Check that previous sender's message did not seen nothing more then supplied message
-          val seenByJust     = just.seen
-          val seenByJustPrev = justPrevMsg.seen
-          (seenByJustPrev -- seenByJust).isEmpty
-        }
-      }
-    } yield res
+      currJs  <- b.justifications.map(msgMap.get).sequence
+      prevMsg <- currJs.find(_.sender == b.sender)
+      prevJs  <- prevMsg.parents.toList.map(msgMap.get).sequence
+    } yield {
+      val parentsHeights     = currJs.map { case m => m.sender -> m.height }.toMap
+      val prevParentsHeights = prevJs.map { case m => m.sender -> m.height }.toMap
+      !parentsHeights.exists { case (v, h) => prevParentsHeights.get(v).exists(_ > h) }
+    }
 
   /**
     * If block contains an invalid justification block B and the creator of B is still bonded,
