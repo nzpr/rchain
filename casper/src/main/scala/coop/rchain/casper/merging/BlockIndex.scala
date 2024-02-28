@@ -88,15 +88,17 @@ object BlockIndex {
     val usrCount    = usrProcessedDeploys.size
     val sysCount    = sysProcessedDeploys.size
     val deployCount = usrCount + sysCount
-    val mrgCount    = mergeableChanData.size
+//    val mrgCount    = mergeableChanData.size
 
-    // Number of deploys must match the size of mergeable channels maps
-    assert(deployCount == mrgCount, {
-      s"Cache of mergeable channels ($mrgCount) doesn't match deploys count ($deployCount)."
-    })
+//    // Number of deploys must match the size of mergeable channels maps
+//    assert(deployCount == mrgCount, {
+//      s"Cache of mergeable channels ($mrgCount) doesn't match deploys count ($deployCount)."
+//    })
+
+    val emptyMergeableChanData = (1 to deployCount).toList.as(Map.empty[Blake2b256Hash, Long])
 
     // Connect deploy with corresponding mergeable channels map
-    val (usrDeploys, sysDeploys) = mergeableChanData.toVector
+    val (usrDeploys, sysDeploys) = emptyMergeableChanData.toVector
       .splitAt(usrCount)
       .bimap(usrProcessedDeploys.toVector.zip(_), sysProcessedDeploys.toVector.zip(_))
 

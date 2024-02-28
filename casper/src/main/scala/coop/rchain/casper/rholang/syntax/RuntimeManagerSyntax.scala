@@ -40,13 +40,18 @@ final class RuntimeManagerOps[F[_]](private val rm: RuntimeManager[F]) extends A
         .get
         .map(_.toByteVector)
 
-    def mergeableStoreError =
-      new Exception(s"Mergeable store invalid state hash ${stateHash.bytes.toHex}.")
+//    def mergeableStoreError =
+//      new Exception(s"Mergeable store invalid state hash ${stateHash.bytes.toHex}.")
 
     for {
       key    <- getKey
       resOpt <- rm.getMergeableStore.get1(key)
-      res    <- resOpt.liftTo(mergeableStoreError)
+      // TODO this disables merging, no channels will be mergeable.
+      // This change is done to be able to bootstrap the network from LFS.
+      // Mergeable channels are populated only through replay process, so mergeable channels
+      // for states for blocks that has not been replayed are not available if the node is started from LFS.
+      res = resOpt.getOrElse(Seq())
+//      res    <- resOpt.liftTo(mergeableStoreError)
       resMrg = res.map(_.channels.map(x => (x.hash, x.diff)).toMap)
     } yield resMrg
   }
