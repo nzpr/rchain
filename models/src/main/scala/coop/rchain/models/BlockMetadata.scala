@@ -9,6 +9,7 @@ import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.syntax._
 import coop.rchain.rspace.hashing.Blake2b256Hash
+import coop.rchain.rspace.history.instances.RadixHistory
 
 final case class BlockMetadata(
     blockHash: BlockHash,
@@ -76,7 +77,7 @@ object BlockMetadata {
       validated = false,
       validationFailed = false,
       fringe = Set(),
-      fringeStateHash = protobuf.ByteString.EMPTY,
+      fringeStateHash = RadixHistory.emptyRootHash.toByteString,
       memberOfFringe = none
     )
 }
