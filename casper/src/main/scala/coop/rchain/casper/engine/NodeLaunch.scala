@@ -75,7 +75,7 @@ object NodeLaunch {
 
         // Store genesis block
         _             <- BlockStore[F].put(genesisBlock)
-        genesisFringe = FinalizedFringe(hashes = Seq(), genesisBlock.preStateHash)
+        genesisFringe = FinalizedFringe(hashes = Seq(), genesisBlock.preStateHash, Set())
         _             <- ApprovedStore[F].putApprovedBlock(genesisFringe)
 
         // Add genesis block to DAG

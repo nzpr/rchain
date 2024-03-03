@@ -32,7 +32,7 @@ class LfsBlockRequesterEffectsSpec extends AnyFlatSpec with Matchers with Fs2Str
   }
 
   def createFinalizedFringe(block: BlockMessage): FinalizedFringe =
-    FinalizedFringe(block.justifications, block.postStateHash)
+    FinalizedFringe(block.justifications, block.postStateHash, Set())
 
   val hash9 = mkHash("9")
   val hash8 = mkHash("8")
