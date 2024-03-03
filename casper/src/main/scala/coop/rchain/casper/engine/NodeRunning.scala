@@ -293,9 +293,29 @@ class NodeRunning[F[_]
         latestFringeHashes    = dag.dagMessageState.latestFringe.map(_.id)
         fringeData            = dag.fringeStates(latestFringeHashes)
         latestFringeStateHash = fringeData.stateHash
+
+        // states of fringes referenced by last 100 blocks
+        // TODO this is a hack to make merging work
+        //  since final fringes are merged. It should not be done this way
+        blocksRange = dag.heightMap
+          .takeRight(100)
+          .values
+          .flatten
+          .toList
+        miscFinalStateHashes = blocksRange
+          .map(x => dag.dagMessageState.msgMap(x).fringe)
+          .map(dag.fringeStates)
+          .map(_.stateHash.toByteString)
+          .toSet
+        mistPrePostStateHashes <- blocksRange
+                                   .traverse(BlockStore[F].getUnsafe)
+                                   .map(_.flatMap(b => List(b.preStateHash, b.postStateHash)))
+        miscStateHashes = miscFinalStateHashes ++ mistPrePostStateHashes
+
         fringeResponse = FinalizedFringe(
           latestFringeHashes.toList,
-          latestFringeStateHash.toByteString
+          latestFringeStateHash.toByteString,
+          miscStateHashes
         )
 
         _ <- handleFinalizedFringeRequest(peer, fringeResponse)
