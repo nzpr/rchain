@@ -256,7 +256,8 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
             // Update result with accumulated event logs (if evaluation failed also)
             for {
               collected             <- st.get
-              mergeableChannelsData <- getNumberChannelsData(collected.mergeableChannels)
+              mergeableChannelsData = Map.empty[Blake2b256Hash, Long]
+//              mergeableChannelsData <- getNumberChannelsData(collected.mergeableChannels)
             } yield UserDeployRuntimeResult(
               pd.copy(deployLog = collected.eventLog.toList),
               mergeableChannelsData,
@@ -303,7 +304,8 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
     processDeploy(deploy, rand.splitByte(BlockRandomSeed.UserDeploySplitIndex)) flatMap {
       case (pd, result @ EvaluateResult(_, _, mergeChs)) =>
         for {
-          mergeableData <- getNumberChannelsData(mergeChs)
+//          mergeableData <- getNumberChannelsData(mergeChs)
+          mergeableData <- Map.empty[Blake2b256Hash, Long].pure[F]
         } yield UserDeployRuntimeResult(pd, mergeableData, result)
     }
 

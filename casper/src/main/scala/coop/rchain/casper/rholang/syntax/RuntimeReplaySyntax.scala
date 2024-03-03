@@ -177,7 +177,7 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
                 _ <- runtime.createSoftCheckpoint
 
                 // Collect Pre-charge mergeable channels
-                _ <- mergeable.update(_ ++ evalResult.mergeable).whenA(evalResult.succeeded)
+//                _ <- mergeable.update(_ ++ evalResult.mergeable).whenA(evalResult.succeeded)
               } yield ()
           }
 
@@ -196,7 +196,7 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
                 _ <- runtime.createSoftCheckpoint
 
                 // Collect Refund mergeable channels
-                _ <- mergeable.update(_ ++ evalResult.mergeable).whenA(evalResult.succeeded)
+//                _ <- mergeable.update(_ ++ evalResult.mergeable).whenA(evalResult.succeeded)
               } yield ()
 
           }
