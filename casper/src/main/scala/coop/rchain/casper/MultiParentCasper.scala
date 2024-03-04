@@ -20,6 +20,7 @@ import coop.rchain.models.{BlockHash => _, _}
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared._
 import cats.effect.Temporal
+import coop.rchain.shared.syntax.sharedSyntaxKeyValueTypedStore
 
 final case class ParsingError(details: String)
 
@@ -91,29 +92,44 @@ object MultiParentCasper {
 
       // If new fringe is finalized, merge it
       newFringeResult <- newFringeHashes.traverse { fringe =>
-                          val (mScope, baseOpt) =
-                            MergeScope.fromDag(fringe, prevFringeHashes, dag.childMap, msgMap)
-                          for {
-                            baseStateOpt <- baseOpt.traverse { h =>
-                                             BlockStore[F]
-                                               .getUnsafe(h)
-                                               .map(_.postStateHash.toBlake2b256Hash)
-                                           }
-                            result <- MergeScope.merge(
-                                       mScope,
-                                       baseStateOpt.getOrElse(prevFringeState),
-                                       dag.fringeStates,
-                                       RuntimeManager[F].getHistoryRepo,
-                                       BlockIndex.getBlockIndex[F](_)
-                                     )
-                            (finalizedState, rejected) = result
-                            finalizedStateStr = PrettyPrinter.buildString(
-                              finalizedState.toByteString
-                            )
-                            rejectedDeploysStr = PrettyPrinter.buildString(rejected)
-                            msgFinalized       = s"Finalized fringe state: $finalizedStateStr, rejectedDeploys: $rejectedDeploysStr"
-                            _                  <- Log[F].info(msgFinalized)
-                          } yield result
+                          val mergeFringe = {
+                            val (mScope, baseOpt) =
+                              MergeScope.fromDag(fringe, prevFringeHashes, dag.childMap, msgMap)
+                            for {
+                              baseStateOpt <- baseOpt.traverse { h =>
+                                               BlockStore[F]
+                                                 .getUnsafe(h)
+                                                 .map(_.postStateHash.toBlake2b256Hash)
+                                             }
+                              result <- MergeScope.merge(
+                                         mScope,
+                                         baseStateOpt.getOrElse(prevFringeState),
+                                         dag.fringeStates,
+                                         RuntimeManager[F].getHistoryRepo,
+                                         BlockIndex.getBlockIndex[F](_)
+                                       )
+                            } yield result
+                          }
+                          (MergeScope.findSingleTip(fringe, dag) match {
+                            case Some(tip) =>
+                              for {
+                                state <- BlockStore[F]
+                                          .get1(tip)
+                                          .map(_.get.postStateHash.toBlake2b256Hash)
+                                rjFin <- fringe.toList
+                                          .traverse(BlockStore[F].get1)
+                                          .map(_.flatMap(_.get.rejectedDeploys))
+                              } yield state -> rjFin.toSet
+                            case _ => mergeFringe
+                          }).flatTap { result =>
+                            val (finalizedState, rejected) = result
+                            val finalizedStateStr =
+                              PrettyPrinter.buildString(finalizedState.toByteString)
+                            val rejectedDeploysStr = PrettyPrinter.buildString(rejected)
+                            val msgFinalized =
+                              s"New finalized fringe state: $finalizedStateStr, rejectedDeploys: $rejectedDeploysStr"
+                            Log[F].info(msgFinalized)
+                          }
                         }
       (fringeState, rejectedDeploys) = newFringeResult getOrElse (prevFringeState, prevFringeRejectedDeploys)
 
@@ -122,7 +138,8 @@ object MultiParentCasper {
       newFringe  = newFringeHashes.getOrElse(prevFringeHashes)
 
       // Merge conflict scope (non-finalized blocks above fringe)
-      conflictScopeMergeResult <- parentHashes.toSeq match {
+      minGenJs = MergeScope.minGenJs(parentHashes, dag)
+      conflictScopeMergeResult <- minGenJs.toSeq match {
                                    case Seq(parent) =>
                                      BlockStore[F]
                                        .getUnsafe(parent)

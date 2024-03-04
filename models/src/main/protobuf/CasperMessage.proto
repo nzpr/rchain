@@ -27,6 +27,7 @@ message FinalizedFringeProto  {
   option (scalapb.message).extends = "CasperMessageProto";
   repeated bytes hashes = 1 [(scalapb.field).collection_type="List"];
   bytes stateHash       = 2;
+  repeated bytes stateHashes     = 3;  // TODO: this is a hack to make LFS work with the current node code which does merging.
 }
 
 message FinalizedFringeRequestProto {

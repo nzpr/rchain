@@ -228,23 +228,34 @@ object LfsTupleSpaceRequester {
         .terminateAfter(_.isFinished) concurrently responseStream
     }
 
-    val stateHash                   = fringe.stateHash.toBlake2b256Hash
-    val startRequest: StatePartPath = Seq((stateHash, None))
-    for {
-      // Write last finalized state root
-      _ <- stateImporter.setRoot(stateHash)
+    def loadState(stateHash: Blake2b256Hash): F[Stream[F, ST[StatePartPath]]] = {
+      val startRequest: StatePartPath = Seq((stateHash, None))
+      for {
+        // Write last finalized state root
+        _ <- stateImporter.setRoot(stateHash)
 
-      // Requester state
-      st <- Ref.of[F, ST[StatePartPath]](ST(Seq(startRequest)))
+        // Requester state
+        st <- Ref.of[F, ST[StatePartPath]](ST(Seq(startRequest)))
 
-      // Queue to trigger processing of requests. `True` to resend requests.
-      requestQueue <- Channel.bounded[F, Boolean](capacity = 2)
+        // Queue to trigger processing of requests. `True` to resend requests.
+        requestQueue <- Channel.bounded[F, Boolean](capacity = 2)
 
-      // Light the fire! / Starts the first request for chunk of state
-      // - `true` if requested chunks should be re-requested
-      _ <- requestQueue.trySend(false)
+        // Light the fire! / Starts the first request for chunk of state
+        // - `true` if requested chunks should be re-requested
+        _ <- requestQueue.trySend(false)
 
-      // Create tuple space state receiver stream
-    } yield createStream(st, requestQueue)
+        // Create tuple space state receiver stream
+      } yield createStream(st, requestQueue)
+    }
+
+    // load final state hash + auxiliary hashes (TODO remove these)
+    val toLoad = (fringe.stateHashes + fringe.stateHash)
+      .map(Blake2b256Hash.fromByteString)
+      .toList
+
+    Log[F].info(s"Loading tuple space state for ${toLoad.mkString("; ")}") *>
+      toLoad
+        .traverse(loadState)
+        .map(Stream.emits(_).flatten)
   }
 }

@@ -208,7 +208,7 @@ class NodeSyncing[F[_]
       // TODO: height map cannot be used here because invalid blocks can have
       //  invalid block number which will break sequence in height map
       // Add sorted DAG in order from approved block to oldest
-      _ <- heightMap.flatMap(_._2).toList.reverse.traverse_ { hash =>
+      _ <- heightMap.flatMap(_._2).toList.traverse_ { hash =>
             for {
               block <- BlockStore[F].getUnsafe(hash)
               // TODO: blocks added to DAG without validation will have flag `processed=false` so invalid flag is not applicable

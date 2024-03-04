@@ -23,7 +23,7 @@ import cats.effect.unsafe.implicits.global
 class LfsStateRequesterEffectsSpec extends AnyFlatSpec with Matchers with Fs2StreamMatchers {
 
   def createFinalizedFringe(block: BlockMessage): FinalizedFringe =
-    FinalizedFringe(block.justifications, block.postStateHash)
+    FinalizedFringe(block.justifications, block.postStateHash, Set())
 
   // Create hash from hex string (padding to 32 bytes)
   def createHash(s: String) = Blake2b256Hash.fromHex(s.padTo(64, '0'))

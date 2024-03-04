@@ -40,14 +40,21 @@ object CasperMessage {
 
 /* Approved block message */
 
-final case class FinalizedFringe(hashes: Seq[BlockHash], stateHash: StateHash)
-    extends CasperMessage {
+final case class FinalizedFringe(
+    hashes: Seq[BlockHash],
+    stateHash: StateHash,
+    stateHashes: Set[StateHash] // TODO: this is a hack to make LFS work with the current node code which does merging.
+) extends CasperMessage {
   def toProto: FinalizedFringeProto =
-    FinalizedFringeProto().withHashes(hashes.toList).withStateHash(stateHash)
+    FinalizedFringeProto()
+      .withHashes(hashes.toList)
+      .withStateHash(stateHash)
+      .withStateHashes(stateHashes.toList)
 }
 
 object FinalizedFringe {
-  def from(f: FinalizedFringeProto): FinalizedFringe = FinalizedFringe(f.hashes, f.stateHash)
+  def from(f: FinalizedFringeProto): FinalizedFringe =
+    FinalizedFringe(f.hashes, f.stateHash, f.stateHashes.toSet)
 }
 
 final case class FinalizedFringeRequest(identifier: String, trimState: Boolean = false)

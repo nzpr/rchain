@@ -29,6 +29,17 @@ final case class MergeScope(finalScope: Set[BlockHash], conflictScope: Set[Block
 
 object MergeScope {
 
+  def minGenJs(jss: Set[BlockHash], dag: DagRepresentation): Set[BlockHash] =
+    jss.filterNot(
+      j => jss.exists(j2 => (dag.dagMessageState.msgMap(j2).seen - j2).contains(j))
+    )
+
+  def findSingleTip(fringe: Set[BlockHash], dag: DagRepresentation): Option[BlockHash] =
+    minGenJs(fringe, dag).toList match {
+      case List(singleTip) => Some(singleTip)
+      case _               => None
+    }
+
   /**
     * Create Merge scope from DAG
     * @param mergeFringe tip messages of the DAG
