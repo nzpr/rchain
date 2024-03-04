@@ -221,6 +221,11 @@ class NodeSyncing[F[_]
             } yield ()
           }
 
+      // Remove unnecessary blocks from block store (keep last 100)
+      toRemove = heightMap.dropRight(100).flatMap(_._2).toList
+      _        <- BlockStore[F].delete(toRemove)
+      _        <- Log[F].info(s"Removed ${toRemove.size} blocks older then 100 latest dag rows.")
+
       _ <- Log[F].info(s"Blocks for approved state added to DAG.")
     } yield ()
   }
