@@ -90,7 +90,7 @@ final case class BlockReceiverState[MId: Show] private (
           // Update blocks state, keep unseen parents only
           val parentsNotStored = parents.filter(_._2).map(_._1).toSet
           val unseenParents    = parentsNotStored -- blocksSt.keySet -- receiveSt.keySet - id
-          val newBlocksSt      = blocksSt + ((id, unseenParents))
+          val newBlocksSt      = blocksSt + ((id, parents.map(_._1).toSet))
 
           // Update block status to received and set unseen parents to Pending receive state
           val newReceiveStored  = receiveSt + ((id, EndStoreBlock))
@@ -219,7 +219,7 @@ object BlockReceiver {
     // Check if block should be stored
     def checkIfKnown(b: BlockMessage): F[Boolean] =
       BlockDagStorage[F].getRepresentation.map { dag =>
-        dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
+        dag.contains(b.blockHash) //dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
       }
 
     def requestMissingDependencies(deps: Set[BlockHash]): F[Unit] =
@@ -252,7 +252,13 @@ object BlockReceiver {
                           .traverse { hash =>
                             BlockStore[F].contains(hash).not.map((hash, _))
                           }
-              pendingRequests <- state.modify(_.endStored(block.blockHash, parents))
+              dag <- BlockDagStorage[F].getRepresentation
+              pendingRequests <- state.modify(
+                                  _.endStored(
+                                    block.blockHash,
+                                    parents.filterNot(x => dag.contains(x._1))
+                                  )
+                                )
 
               // Notify BlockRetriever of finished validation of block
               _ <- BlockRetriever[F].ackReceived(block.blockHash)
@@ -273,7 +279,7 @@ object BlockReceiver {
                   }
             } yield ()
           for {
-            isOfInterest <- shouldCheck &&^ checkIfKnown(block).not
+            isOfInterest <- checkIfKnown(block).not &&^ shouldCheck
             // Log if block is ignored
             _ <- logNotOfInterest(block).unlessA(isOfInterest)
             // Save to store if block is of interest and send request for missing dependencies

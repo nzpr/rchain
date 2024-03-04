@@ -11,7 +11,6 @@ import scala.Function._
 class RootRepository[F[_]: Sync](
     rootsStore: RootsStore[F]
 ) {
-  val unknownRoot = new RuntimeException("unknown root")
 
   def commit(root: Blake2b256Hash): F[Unit] =
     rootsStore.recordRoot(root)
@@ -24,7 +23,7 @@ class RootRepository[F[_]: Sync](
 
   def validateAndSetCurrentRoot(root: Blake2b256Hash): F[Unit] =
     rootsStore.validateAndSetCurrentRoot(root).flatMap {
-      case None    => Sync[F].raiseError[Unit](unknownRoot)
+      case None    => new RuntimeException(s"unknown root $root").raiseError[F, Unit]
       case Some(_) => Applicative[F].pure(())
     }
 
