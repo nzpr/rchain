@@ -92,7 +92,7 @@ case class TestNode[F[_]: Async](
   implicit val connectionsCell: Ref[F, Connections]          = connectionsCellEffect
   implicit val rp: RPConfAsk[F]                              = rpConfAskEffect
 
-  val finalizedFringe = FinalizedFringe(Seq(genesis.blockHash), genesis.postStateHash)
+  val finalizedFringe = FinalizedFringe(Seq(genesis.blockHash), genesis.postStateHash, Set())
 
   val postGenesisStateHash = genesis.postStateHash
 
