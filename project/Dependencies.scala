@@ -10,7 +10,7 @@ object Dependencies {
   val fs2Version        = "3.6.1"
   val http4sVersion     = "0.23.6"
   val endpointsVersion  = "1.9.0"
-  val circeVersion      = "0.14.3"
+  val circeVersion      = "0.14.1"
   val enumeratumVersion = "1.5.13"
   val slf4jVersion      = "2.0.7"
   val kamonVersion      = "2.6.0"
@@ -33,7 +33,7 @@ object Dependencies {
   val circeGeneric        = "io.circe"                   %% "circe-generic"             % circeVersion
   val circeGenericExtras  = "io.circe"                   %% "circe-generic-extras"      % circeVersion
   val circeLiteral        = "io.circe"                   %% "circe-literal"             % circeVersion
-  val circeParser         = "io.circe"                   %% "circe-parser"              % "0.14.1"
+  val circeParser         = "io.circe"                   %% "circe-parser"              % circeVersion
   val disciplineCore      = "org.typelevel"              %% "discipline-core"           % "1.4.0"
   val enumeratum          = "com.beachape"               %% "enumeratum"                % enumeratumVersion
   val endpoints           = "org.endpoints4s"            %% "algebra"                   % endpointsVersion
