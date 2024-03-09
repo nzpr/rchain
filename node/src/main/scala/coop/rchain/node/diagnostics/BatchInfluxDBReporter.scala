@@ -1,17 +1,13 @@
 package coop.rchain.node.diagnostics
 
-import cats.effect.IO
 import cats.effect.kernel.Async
-import cats.effect.std.Supervisor
-import cats.effect.unsafe.implicits.global
 import cats.implicits.catsSyntaxOptionId
 import com.typesafe.config.Config
 import coop.rchain.node.diagnostics.BatchInfluxDBReporter.Settings
 import fs2.concurrent.Channel
-import kamon.metric._
 import kamon.Kamon
-import kamon.influxdb.InfluxDBReporter
-import kamon.module.{MetricReporter, ModuleFactory}
+import kamon.metric._
+import kamon.module.MetricReporter
 import kamon.status.Environment
 import kamon.tag.{Tag, TagSet}
 import kamon.util.EnvironmentTags
