@@ -185,25 +185,25 @@ object NetworkServers {
       reportingRoutes
     )
 
-  def metricsInit[F[_]: Async](
+  def metricsInit[F[_]: Async: Log](
       nodeConf: NodeConf,
       kamonConf: Config,
       prometheusReporter: NewPrometheusReporter
-  ): Resource[F, Unit] = {
-    def start: F[Unit] = Dispatcher.parallel[F].use { d =>
-      Sync[F].delay {
-        Kamon.reconfigure(kamonConf.withFallback(Kamon.config()))
-        if (nodeConf.metrics.influxdb)
-          Kamon.addReporter("BatchInfluxDB", new BatchInfluxDBReporter[F](d)).void()
-        if (nodeConf.metrics.influxdbUdp)
-          Kamon.addReporter("UdpInfluxDb", new UdpInfluxDBReporter()).void()
-        if (nodeConf.metrics.prometheus) Kamon.addReporter("Prometheus", prometheusReporter).void()
-        if (nodeConf.metrics.zipkin) Kamon.addReporter("Zipkin", new ZipkinReporter()).void()
-        // TODO API for processMetrics is changed in new version of Kamon. It has been never used so comment out.
-        //  reconsider use in future
-//        if (nodeConf.metrics.sigar)
-//          kamon.instrumentation.system.process.ProcessMetrics.startCollecting()
-      }
+  ): Resource[F, Unit] = Dispatcher.parallel[F].flatMap { d =>
+    def start: F[Unit] = Sync[F].delay {
+      Kamon.reconfigure(kamonConf.withFallback(Kamon.config()))
+
+      if (nodeConf.metrics.influxdb)
+        Kamon.addReporter("BatchInfluxDB", new BatchInfluxDBReporter[F](d)).void()
+      //        if (nodeConf.metrics.influxdbUdp)
+      //          Kamon.addReporter("UdpInfluxDb", new UdpInfluxDBReporter()).void()
+      if (nodeConf.metrics.prometheus) Kamon.addReporter("Prometheus", prometheusReporter).void()
+      if (nodeConf.metrics.zipkin) Kamon.addReporter("Zipkin", new ZipkinReporter()).void()
+      // TODO API for processMetrics is changed in new version of Kamon. It has been never used so comment out.
+      //  reconsider use in future
+      //        if (nodeConf.metrics.sigar)
+      //          kamon.instrumentation.system.process.ProcessMetrics.startCollecting()
+      Kamon.init(kamonConf.withFallback(Kamon.config()))
     }
 
     import scala.concurrent.ExecutionContext.Implicits.global
