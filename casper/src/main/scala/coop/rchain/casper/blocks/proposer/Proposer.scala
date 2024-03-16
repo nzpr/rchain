@@ -176,7 +176,8 @@ object Proposer {
             !(newStateTransition || Stake.isSuperMajority(attestationStake, preStateBondsStake))
           }
         }
-        suppressAttestation <- nothingToFinalize ||^ waitingForSupermajorityToAttest
+        // TODO: revert back. This disables empty blocks.
+        suppressAttestation <- true.pure //nothingToFinalize ||^ waitingForSupermajorityToAttest
         // user deploys
         pooled <- BlockDagStorage[F].pooledDeploys
         pooledOk <- pooled.toList

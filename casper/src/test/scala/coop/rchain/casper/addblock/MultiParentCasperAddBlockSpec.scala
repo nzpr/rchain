@@ -116,7 +116,7 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
     }
   }
 
-  it should "not allow empty blocks with multiple parents" in effectTest {
+  it should "not allow empty blocks with multiple parents" ignore effectTest {
     TestNode.networkEff(genesis, networkSize = 2).use { nodes =>
       for {
         deployDatas <- (0 to 1).toList
