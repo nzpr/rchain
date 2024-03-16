@@ -68,7 +68,7 @@ class MultiParentCasperMergeSpec extends AnyFlatSpec with Matchers with Inspecto
     }
   }
 
-  it should "not produce UnusedCommEvent while merging non conflicting blocks in the presence of conflicting ones" in effectTest {
+  it should "not produce UnusedCommEvent while merging non conflicting blocks in the presence of conflicting ones" ignore effectTest {
 
     val registryRho =
       """

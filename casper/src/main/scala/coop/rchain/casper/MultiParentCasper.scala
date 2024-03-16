@@ -20,6 +20,7 @@ import coop.rchain.models.{BlockHash => _, _}
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared._
 import cats.effect.Temporal
+import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.shared.syntax.sharedSyntaxKeyValueTypedStore
 
 final case class ParsingError(details: String)
@@ -96,6 +97,9 @@ object MultiParentCasper {
                             val (mScope, baseOpt) =
                               MergeScope.fromDag(fringe, prevFringeHashes, dag.childMap, msgMap)
                             for {
+                              _ <- new Exception(
+                                    s"Multiple parents detected. Merging is not supported"
+                                  ).raiseError[F, (Blake2b256Hash, Set[ByteString])]
                               baseStateOpt <- baseOpt.traverse { h =>
                                                BlockStore[F]
                                                  .getUnsafe(h)
@@ -154,6 +158,9 @@ object MultiParentCasper {
                                          msgMap
                                        )
                                      for {
+                                       _ <- new Exception(
+                                             s"Multiple parents detected. Merging is not supported"
+                                           ).raiseError[F, (Blake2b256Hash, Set[ByteString])]
                                        baseStateOpt <- baseOpt.traverse { h =>
                                                         BlockStore[F]
                                                           .getUnsafe(h)
@@ -237,24 +244,26 @@ object MultiParentCasper {
     val blockSender    = block.sender.toByteArray
 
     // TODO: skip creating block index if already in cache
-    val indexBlock = for {
-      mergeableChs <- RuntimeManager[F].loadMergeableChannels(
-                       blockPostState,
-                       blockSender,
-                       block.seqNum
-                     )
-
-      index <- BlockIndex(
-                block.blockHash,
-                block.state.deploys,
-                block.state.systemDeploys,
-                blockPreState.toBlake2b256Hash,
-                blockPostState.toBlake2b256Hash,
-                RuntimeManager[F].getHistoryRepo,
-                mergeableChs
-              )
-      _ = BlockIndex.cache.putIfAbsent(block.blockHash, index)
-    } yield ()
+    // TODO: implement index invalidation when enabling indexing back, otherwise it leaks memory
+    val indexBlock = Sync[F].unit
+//      for {
+//      mergeableChs <- RuntimeManager[F].loadMergeableChannels(
+//                       blockPostState,
+//                       blockSender,
+//                       block.seqNum
+//                     )
+//
+//      index <- BlockIndex(
+//                block.blockHash,
+//                block.state.deploys,
+//                block.state.systemDeploys,
+//                blockPreState.toBlake2b256Hash,
+//                blockPostState.toBlake2b256Hash,
+//                RuntimeManager[F].getHistoryRepo,
+//                mergeableChs
+//              )
+//      _ = BlockIndex.cache.putIfAbsent(block.blockHash, index)
+//    } yield ()
 
     val validationProcessDiag = for {
       // Create block and measure duration
