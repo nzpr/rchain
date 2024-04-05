@@ -46,20 +46,28 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
 
     def propose: F[StateTransitionResult] = {
       val rand = BlockRandomSeed.randomGenerator(shardId, blockNum, creatorsPk, preStateHash)
-      // seeds from 0 to deploys.size are used in deploys execution, so system deploy seeds start from the next index
-      val slashSeeds =
-        (0 until toSlash.size).map(_ + deploys.size).map(i => rand.splitByte(i.toByte))
-      val closeSeed = rand.splitByte((deploys.size + toSlash.size).toByte)
 
-      val slashDeploys = toSlash.toList.sorted.zip(slashSeeds).map(SlashDeploy.tupled)
-      val closeDeploy  = CloseBlockDeploy(closeSeed)
+      val slashDeploys = {
+        // seeds from 0 to deploys.size are used in deploys execution, so system deploy seeds start from the next index
+        val slashSeeds =
+          (0 until toSlash.size).map(_ + deploys.size).map(i => rand.splitByte(i.toByte))
+        toSlash.toList.sorted.zip(slashSeeds).map(SlashDeploy.tupled)
+      }
+
+      // Close block using rholang only if rholang state has been adjusted by a block
+      val closeDeployOpt = (slashDeploys.nonEmpty || deploys.nonEmpty).guard[Option].as {
+        val closeSeed = rand.splitByte((deploys.size + toSlash.size).toByte)
+        CloseBlockDeploy(closeSeed)
+      }
+
+      val sysDeploys = closeDeployOpt.map(slashDeploys :+ _).getOrElse(slashDeploys)
 
       BlockDagStorage[F].pooledDeploys
         .map(_.view.filterKeys(deploys.toSet).values.toSeq)
         .flatMap(
           InterpreterUtil.computeDeploysCheckpoint[F](
             _,
-            slashDeploys :+ closeDeploy,
+            sysDeploys,
             rand,
             blockData,
             preStateHash.toByteString
