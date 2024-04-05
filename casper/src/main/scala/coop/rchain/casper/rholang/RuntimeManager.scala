@@ -28,6 +28,7 @@ import coop.rchain.rholang.interpreter.{EvaluateResult, ReplayRhoRuntime, RhoRun
 import coop.rchain.rspace
 import coop.rchain.rspace.RSpace.RSpaceStore
 import coop.rchain.rspace.{RSpace, ReplayRSpace}
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
@@ -71,7 +72,7 @@ trait RuntimeManager[F[_]] {
   def getMergeableStore: MergeableStore[F]
 }
 
-final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel](
+final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel: Cache](
     space: RhoISpace[F],
     replaySpace: RhoReplayISpace[F],
     historyRepo: RhoHistoryRepository[F],
@@ -195,8 +196,8 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel](
   def getActiveValidators(startHash: StateHash): F[Seq[Validator]] =
     spawnRuntime.flatMap(_.getActiveValidators(startHash))
 
-  def computeBonds(hash: StateHash): F[Map[Validator, Long]] =
-    spawnRuntime.flatMap { runtime =>
+  def computeBonds(hash: StateHash): F[Map[Validator, Long]] = {
+    val f = spawnRuntime.flatMap { runtime =>
       def logError(err: Throwable, details: RetryDetails): F[Unit] = details match {
         case WillDelayAndRetry(_, retriesSoFar: Int, _) =>
           Log[F].error(
@@ -218,6 +219,9 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel](
         onError = logError
       )(runtime.computeBonds(hash))
     }
+
+    Cache[F].cached(s"bonds_$hash", f)
+  }
 
   // Executes deploy as user deploy with immediate rollback
   // - InterpreterError is rethrown
@@ -258,7 +262,7 @@ object RuntimeManager {
 
   def apply[F[_]](implicit F: RuntimeManager[F]): F.type = F
 
-  def apply[F[_]: Async: Parallel: Metrics: Span: Log](
+  def apply[F[_]: Async: Parallel: Metrics: Span: Log: Cache](
       rSpace: RhoISpace[F],
       replayRSpace: RhoReplayISpace[F],
       historyRepo: RhoHistoryRepository[F],
@@ -277,7 +281,7 @@ object RuntimeManager {
       )
     )
 
-  def apply[F[_]: Async: Parallel: Metrics: Span: Log](
+  def apply[F[_]: Async: Parallel: Metrics: Span: Log: Cache](
       store: RSpaceStore[F],
       mergeableStore: MergeableStore[F],
       mergeableTagName: Par,
@@ -287,7 +291,7 @@ object RuntimeManager {
       _._1
     )
 
-  def createWithHistory[F[_]: Async: Parallel: Metrics: Span: Log](
+  def createWithHistory[F[_]: Async: Parallel: Metrics: Span: Log: Cache](
       store: RSpaceStore[F],
       mergeableStore: MergeableStore[F],
       mergeableTagName: Par,

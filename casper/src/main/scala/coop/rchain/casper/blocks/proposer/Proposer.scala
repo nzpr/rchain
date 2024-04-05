@@ -163,21 +163,21 @@ object Proposer {
         nothingToFinalize = conflictSet.toList
           .traverse(BlockStore[F].getUnsafe)
           .map(!_.exists(hasDeploys))
-        waitingForSupermajorityToAttest = {
-          val newlySeen = creatorsLatestOpt
-            .map(_.justifications.flatMap(seen) -- parentHashes.flatMap(seen))
-            .getOrElse(Set())
-          newlySeen.toList.traverse(BlockStore[F].getUnsafe).map { newBlocks =>
-            val newStateTransition = newBlocks.exists(hasDeploys)
-            val attestationStake =
-              preStateBonds.view.filterKeys(newBlocks.map(_.sender).toSet).values.toList.sum
-            val preStateBondsStake = preStateBonds.values.toList.sum
-
-            !(newStateTransition || Stake.isSuperMajority(attestationStake, preStateBondsStake))
-          }
-        }
-        // TODO: revert back. This disables empty blocks.
-        suppressAttestation <- true.pure //nothingToFinalize ||^ waitingForSupermajorityToAttest
+        // TODO enable when multi parent
+//        waitingForSupermajorityToAttest = {
+//          val newlySeen = creatorsLatestOpt
+//            .map(_.justifications.flatMap(seen) -- parentHashes.flatMap(seen))
+//            .getOrElse(Set())
+//          newlySeen.toList.traverse(BlockStore[F].getUnsafe).map { newBlocks =>
+//            val newStateTransition = newBlocks.exists(hasDeploys)
+//            val attestationStake =
+//              preStateBonds.view.filterKeys(newBlocks.map(_.sender).toSet).values.toList.sum
+//            val preStateBondsStake = preStateBonds.values.toList.sum
+//
+//            !(newStateTransition || Stake.isSuperMajority(attestationStake, preStateBondsStake))
+//          }
+//        }
+        suppressAttestation <- nothingToFinalize //||^ waitingForSupermajorityToAttest
         // user deploys
         pooled <- BlockDagStorage[F].pooledDeploys
         pooledOk <- pooled.toList

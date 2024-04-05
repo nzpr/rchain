@@ -25,6 +25,7 @@ import java.nio.file.{Files, Path}
 import scala.collection.compat.immutable.LazyList
 import scala.collection.mutable
 import cats.effect.unsafe.implicits.global
+import coop.rchain.sdk.cache.Cache
 
 object GenesisBuilder {
 
@@ -167,6 +168,7 @@ object GenesisBuilder {
     implicit val log: Log.NOPLog[IO]                                = new Log.NOPLog[IO]
     implicit val metricsEff: Metrics[IO]                            = new metrics.Metrics.MetricsNOP[IO]
     implicit val spanEff                                            = NoopSpan[IO]()
+    implicit val c: Cache[IO]                                       = Cache.noOp[IO]
 
     (for {
       kvsManager <- mkTestRNodeStoreManager[IO](storageDirectory)

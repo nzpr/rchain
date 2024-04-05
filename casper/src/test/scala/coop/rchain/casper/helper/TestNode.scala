@@ -39,6 +39,7 @@ import fs2.concurrent.Channel
 import java.nio.file.Path
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import cats.effect.{Deferred, Ref, Temporal}
+import coop.rchain.sdk.cache.Cache
 
 case class TestNode[F[_]: Async](
     name: String,
@@ -383,6 +384,7 @@ object TestNode {
     implicit val log       = Log.log[F]
     implicit val metricEff = new Metrics.MetricsNOP[F]
     implicit val spanEff   = new NoopSpan[F]
+    implicit val c         = Cache.noOp[F]
     for {
       newStorageDir   <- Resources.copyStorage[F](storageDir)
       kvm             <- Resource.eval(Resources.mkTestRNodeStoreManager(newStorageDir))

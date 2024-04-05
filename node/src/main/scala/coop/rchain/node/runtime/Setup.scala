@@ -45,9 +45,10 @@ import coop.rchain.store.KeyValueStoreManager
 import fs2.Stream
 import fs2.concurrent.Channel
 import cats.effect.{Deferred, Ref, Temporal}
+import coop.rchain.sdk.cache.Cache
 
 object Setup {
-  def setupNodeProgram[F[_]: Async: Parallel: LocalEnvironment: TransportLayer: NodeDiscovery: Log: Metrics](
+  def setupNodeProgram[F[_]: Async: Parallel: LocalEnvironment: TransportLayer: NodeDiscovery: Log: Metrics: Cache](
       storeManager: KeyValueStoreManager[F],
       rpConnections: ConnectionsCell[F],
       rpConfAsk: ApplicativeAsk[F, RPConf],
