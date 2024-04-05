@@ -153,14 +153,17 @@ object InterpreterUtil {
         _                  <- Span[F].mark("before-process-pre-state-hash")
         blockData          = BlockData.fromBlock(block)
         withCostAccounting = block.justifications.nonEmpty
-        replayResultF = RuntimeManager[F]
-          .replayComputeState(initialStateHash)(
-            internalDeploys,
-            internalSystemDeploys,
-            rand,
-            blockData,
-            withCostAccounting
-          )
+        replayResultF = if (internalDeploys.isEmpty && internalSystemDeploys.isEmpty)
+          block.postStateHash.asRight[ReplayFailure].pure
+        else
+          RuntimeManager[F]
+            .replayComputeState(initialStateHash)(
+              internalDeploys,
+              internalSystemDeploys,
+              rand,
+              blockData,
+              withCostAccounting
+            )
         replayResult <- retryingOnFailures[Either[ReplayFailure, StateHash]](
                          RetryPolicies.limitRetries(3), {
                            case Right(stateHash) => stateHash == block.postStateHash
@@ -260,14 +263,17 @@ object InterpreterUtil {
       preStateHash: StateHash
   ): F[(StateHash, Seq[ProcessedDeploy], Seq[ProcessedSystemDeploy])] =
     Span[F].trace(ComputeDeploysCheckpointMetricsSource) {
-      for {
-        result <- RuntimeManager[F].computeState(preStateHash)(
-                   deploys,
-                   systemDeploys,
-                   rand,
-                   blockData
-                 )
-        (postStateHash, processedDeploys, processedSystemDeploys) = result
-      } yield (postStateHash, processedDeploys, processedSystemDeploys)
+      if (deploys.isEmpty && systemDeploys.isEmpty) {
+        (preStateHash, Seq.empty[ProcessedDeploy], Seq.empty[ProcessedSystemDeploy]).pure
+      } else
+        for {
+          result <- RuntimeManager[F].computeState(preStateHash)(
+                     deploys,
+                     systemDeploys,
+                     rand,
+                     blockData
+                   )
+          (postStateHash, processedDeploys, processedSystemDeploys) = result
+        } yield (postStateHash, processedDeploys, processedSystemDeploys)
     }
 }
