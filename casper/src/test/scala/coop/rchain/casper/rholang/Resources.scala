@@ -1,7 +1,7 @@
 package coop.rchain.casper.rholang
 
 import cats.Parallel
-import cats.effect.{Async, Resource, Sync}
+import cats.effect.{Async, IO, Resource, Sync}
 import cats.syntax.all._
 import coop.rchain.casper.storage.RNodeKeyValueStoreManager.rnodeDbMapping
 import coop.rchain.metrics
@@ -9,6 +9,7 @@ import coop.rchain.metrics.{NoopSpan, Span}
 import coop.rchain.models.Par
 import coop.rchain.rholang.Resources.mkTempDir
 import coop.rchain.rspace.syntax._
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared.Log
 import coop.rchain.store.LmdbDirStoreManager.mb
 import coop.rchain.store.{KeyValueStoreManager, LmdbDirStoreManager}
@@ -52,6 +53,7 @@ object Resources {
     implicit val log               = Log.log[F]
     implicit val metricsEff        = new metrics.Metrics.MetricsNOP[F]
     implicit val noopSpan: Span[F] = NoopSpan[F]()
+    implicit val c: Cache[F]       = Cache.noOp[F]
 
     for {
       rStore <- kvm.rSpaceStores

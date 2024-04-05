@@ -26,6 +26,7 @@ import coop.rchain.models.blockImplicits._
 import coop.rchain.models.syntax._
 import coop.rchain.p2p.EffectsTestInstances.LogStub
 import coop.rchain.rspace.syntax._
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared.Log
 import coop.rchain.shared.scalatestcontrib._
 import org.scalatest._
@@ -453,6 +454,7 @@ class ValidateTest
 
       val storageDirectory = Files.createTempDirectory(s"hash-set-casper-test-genesis-")
 
+      implicit val c: Cache[IO] = Cache.noOp[IO]
       for {
         kvm    <- mkTestRNodeStoreManager[IO](storageDirectory)
         rStore <- kvm.rSpaceStores

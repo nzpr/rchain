@@ -2,7 +2,6 @@ package coop.rchain.sdk.cache
 
 import cats.effect.{Async, Deferred, Ref}
 import cats.syntax.all._
-import coop.rchain.sdk.error.FatalError
 
 import scala.collection.mutable
 

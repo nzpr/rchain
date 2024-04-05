@@ -19,6 +19,7 @@ import coop.rchain.metrics.{Metrics, NoopSpan, Span}
 import coop.rchain.models.syntax._
 import coop.rchain.p2p.EffectsTestInstances.LogStub
 import coop.rchain.rspace.syntax._
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared.PathOps.RichPath
 import coop.rchain.shared.syntax._
 import org.scalatest.EitherValues
@@ -276,6 +277,7 @@ object GenesisTest {
     implicit val noopMetrics: Metrics[F] = new metrics.Metrics.MetricsNOP[F]
     implicit val span: Span[F]           = NoopSpan[F]()
     implicit val log                     = new LogStub[F]
+    implicit val c: Cache[F]             = Cache.noOp[F]
 
     for {
       kvsManager <- Resources.mkTestRNodeStoreManager[F](storePath)
