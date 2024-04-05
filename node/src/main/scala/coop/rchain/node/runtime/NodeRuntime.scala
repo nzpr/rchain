@@ -17,9 +17,11 @@ import coop.rchain.node.configuration.NodeConf
 import coop.rchain.node.runtime.NodeCallCtx.NodeCallCtxReader
 import coop.rchain.node.runtime.NodeRuntime._
 import coop.rchain.node.{diagnostics, effects}
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import fs2.Stream
+
 import scala.concurrent.duration._
 
 object NodeRuntime {
@@ -172,6 +174,8 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
       // RNode key-value store manager / manages LMDB databases
       storeManagerResource <- RNodeKeyValueStoreManager(nodeConf.storage.dataDir).map(_.asResource)
 
+      cache <- Cache.lru[F](nodeConf.cacheDepth)
+
       // Node launch process (Stream) with managed resources
       nodeLaunchResource: Resource[F, Stream[F, Unit]] = {
         implicit val (tr, ca, cc) = (transport, rpConfAsk, rpConnections)
@@ -180,7 +184,8 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
           storeManager <- storeManagerResource
 
           // Running node as a Stream
-          result <- Resource.eval(
+          result <- Resource.eval {
+                     implicit val c: Cache[F] = cache
                      Setup.setupNodeProgram[F](
                        storeManager,
                        rpConnections,
@@ -189,7 +194,7 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
                        blockRetriever,
                        nodeConf
                      )
-                   )
+                   }
           (nodeLaunch, routingMsgQueue, grpcServices, webApi, adminWebApi, reportRoutes) = result
 
           // Build network resources

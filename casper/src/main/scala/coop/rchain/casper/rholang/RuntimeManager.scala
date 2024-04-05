@@ -195,8 +195,8 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel](
   def getActiveValidators(startHash: StateHash): F[Seq[Validator]] =
     spawnRuntime.flatMap(_.getActiveValidators(startHash))
 
-  def computeBonds(hash: StateHash): F[Map[Validator, Long]] =
-    spawnRuntime.flatMap { runtime =>
+  def computeBonds(hash: StateHash): F[Map[Validator, Long]] = {
+    val f = spawnRuntime.flatMap { runtime =>
       def logError(err: Throwable, details: RetryDetails): F[Unit] = details match {
         case WillDelayAndRetry(_, retriesSoFar: Int, _) =>
           Log[F].error(
@@ -218,6 +218,9 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel](
         onError = logError
       )(runtime.computeBonds(hash))
     }
+
+    Cache[F].cached(s"bonds_$hash", f)
+  }
 
   // Executes deploy as user deploy with immediate rollback
   // - InterpreterError is rethrown
