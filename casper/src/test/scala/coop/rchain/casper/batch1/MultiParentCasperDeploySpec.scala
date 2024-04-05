@@ -9,6 +9,7 @@ import coop.rchain.shared.scalatestcontrib._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.{EitherValues, Inspectors}
 import org.scalatest.matchers.should.Matchers
+import coop.rchain.shared.syntax._
 
 class MultiParentCasperDeploySpec
     extends AnyFlatSpec
@@ -30,7 +31,13 @@ class MultiParentCasperDeploySpec
         _                  <- node0.propagateBlock(deploy)(node1)
         _                  <- node0.blockDagStorage.addDeploy(deploy)
         createBlockResult2 <- node1.proposeSync.attempt
-      } yield createBlockResult2.isLeft shouldBe true
+        _                  = createBlockResult2 shouldBe a[Right[_, _]]
+        hash               = createBlockResult2.value
+        deploys            <- node1.blockStore.get1(hash).map(_.map(_.state).map(x => x.deploys))
+      } yield {
+        deploys.isDefined shouldBe true
+        deploys.get should have size 0
+      }
     }
   }
 

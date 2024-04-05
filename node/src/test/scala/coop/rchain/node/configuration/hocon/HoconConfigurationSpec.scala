@@ -140,7 +140,8 @@ class HoconConfigurationSpec extends AnyFunSuite with Matchers {
         zipkin = false,
         sigar = false
       ),
-      dev = DevConf(deployerPrivateKey = None)
+      dev = DevConf(deployerPrivateKey = None),
+      cacheDepth = 1000
     )
     config shouldEqual expectedConfig
   }

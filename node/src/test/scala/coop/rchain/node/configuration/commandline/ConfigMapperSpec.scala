@@ -221,7 +221,8 @@ class ConfigMapperSpec extends AnyFunSuite with Matchers {
         zipkin = true,
         sigar = true
       ),
-      dev = DevConf(deployerPrivateKey = None)
+      dev = DevConf(deployerPrivateKey = None),
+      cacheDepth = 1000
     )
     config shouldEqual expectedConfig
   }
