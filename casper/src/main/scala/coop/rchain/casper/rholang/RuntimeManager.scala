@@ -220,7 +220,7 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel: C
       )(runtime.computeBonds(hash))
     }
 
-    Cache[F].cached(s"bonds_$hash", f)
+    Cache[F].cached(s"bonds_${hash.show}", f)
   }
 
   // Executes deploy as user deploy with immediate rollback
