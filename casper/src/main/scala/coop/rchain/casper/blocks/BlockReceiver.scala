@@ -125,15 +125,18 @@ final case class BlockReceiverState[MId: Show] private (
     * @return next blocks with validated dependencies
     */
   def finished(id: MId, parents: Set[MId]): (BlockReceiverState[MId], Set[MId]) = {
-    val parentsInState = blocksSt.contains(id)
-    val isReceived = receiveSt.get(id).collect {
-      case EndStoreBlock     =>
-      case PendingValidation =>
-    }
+    val inState = blocksSt.contains(id)
+    val isReceived = receiveSt
+      .get(id)
+      .collect {
+        case EndStoreBlock     =>
+        case PendingValidation =>
+      }
+      .isDefined
     // To finish block it must be present in the state (parents relations and at least stored)
     assert(
-      parentsInState && isReceived.isDefined,
-      s"Calling finished on unexpected block hash ${id.show}."
+      inState && isReceived,
+      s"Calling finished on unexpected block hash ${id.show} (inState $inState isReceived $isReceived)."
     )
 
     // Update blocks state
