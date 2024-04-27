@@ -17,4 +17,13 @@ trait WebApiAdminEndpoints
     ok(jsonResponse[String]),
     docs = EndpointDocs().withDescription("Create and propose block".some)
   )
+
+  val vDag: Endpoint[Int, String] = endpoint(
+    get(path / "vdag" / dagDepth),
+    ok(textResponse),
+    docs = EndpointDocs().withDescription("Render dag in DOT format".some)
+  )
+
+  private lazy val dagDepth =
+    segment[Int](name = "depth", docs = "Depth of the Dag to render".some)
 }

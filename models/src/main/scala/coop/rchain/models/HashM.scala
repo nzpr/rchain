@@ -178,6 +178,8 @@ object HashM extends HashMDerivation {
   implicit val ContinuationAtNameResponseV2Hash = gen[v1.ContinuationAtNameResponse]
   implicit val FindDeployResponseV2Hash         = gen[v1.FindDeployResponse]
   implicit val LastFinalizedBlockResponseV2Hash = gen[v1.LastFinalizedBlockResponse]
+
+  implicit val viewProtoHash = gen[ViewProto]
 }
 
 trait HashMDerivation {

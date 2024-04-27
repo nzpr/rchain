@@ -26,6 +26,9 @@ object AdminWebApiRoutes {
     HttpRoutes.of[F] {
       case POST -> Root / "propose" =>
         adminWebApi.propose.handle
+
+      case POST -> Root / "vdag" / IntVar(depth) =>
+        adminWebApi.vDag(depth, 0, showJs = true).handle
     }
   }
 }

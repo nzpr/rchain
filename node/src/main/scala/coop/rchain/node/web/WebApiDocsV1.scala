@@ -30,7 +30,7 @@ object WebApiDocs
       getBlock
     )
 
-  val admin = Seq(propose)
+  val admin = Seq(propose, vDag)
 
   // Public API Open API schema
   val publicApi: OpenApi = openApi(Info(title = "RNode API", version = "1.0"))(public: _*)
