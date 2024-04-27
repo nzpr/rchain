@@ -52,8 +52,10 @@ final case class DagRepresentation(
         .toMap
     )
     val seenByFringe = Monoid[View[Validator]].combineAll(latestFringe.map(_.seen) + fringeAsSeen)
-    val msgMeta      = dagMessageState.msgMap.getUnsafe(blockHash)
-    seenByFringe.seen.get(msgMeta.sender).exists(_.contains(msgMeta.senderSeq.toInt))
+    val msgMetaOpt   = dagMessageState.msgMap.get(blockHash)
+    msgMetaOpt.exists { msgMeta =>
+      seenByFringe.seen.get(msgMeta.sender).exists(_.contains(msgMeta.senderSeq.toInt))
+    }
   }
 
   def topoSort(

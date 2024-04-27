@@ -14,6 +14,8 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockMetadata, FringeData}
+import coop.rchain.sdk.dag.View
+import coop.rchain.sdk.syntax.all.mapSyntax
 import coop.rchain.shared.Log
 import org.mockito.{ArgumentMatchersSugar, IdiomaticMockito, Mockito}
 import org.scalatest.EitherValues
@@ -189,7 +191,8 @@ class BlocksResponseAPITest
             Set.empty,
             Set.empty
           )
-        )
+        ),
+        Map()
       )
     )
     val bds = mock[BlockDagStorage[F]]
@@ -205,9 +208,15 @@ class BlocksResponseAPITest
         val newHeightMap = s.heightMap + (b.blockNumber -> (s.heightMap
           .getOrElse(b.blockNumber, Set.empty) + b.blockHash))
 
-        val seen = b.justifications
-          .flatMap(h => s.dagMessageState.msgMap(h).seen)
-          .toSet ++ b.justifications + b.blockHash
+        val seen = {
+          val jsm = b.justifications.map(s.dagMessageState.msgMap.getUnsafe)
+          View.compute[Validator, Message[BlockHash, Validator]](
+            jsm.toSet,
+            _.sender,
+            _.senderSeq,
+            _.seen
+          )
+        }
 
         val newMsgMap = s.dagMessageState.msgMap + (b.blockHash -> toMessage(b, seen))
 
@@ -237,7 +246,7 @@ class BlocksResponseAPITest
   // Default args only available for public method in Scala 2.12 (https://github.com/scala/bug/issues/12168)
   def toMessage(
       m: BlockMessage,
-      seen: Set[BlockHash] = Set.empty[BlockHash]
+      seen: View[Validator] = View.semigroupDagSeen.empty
   ): Message[BlockHash, Validator] =
     Message[BlockHash, Validator](
       m.blockHash,
