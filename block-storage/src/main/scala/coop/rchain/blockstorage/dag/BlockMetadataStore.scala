@@ -1,34 +1,37 @@
 package coop.rchain.blockstorage.dag
 
 import cats.Monad
-import cats.effect.Sync
+import cats.effect.{Ref, Sync}
 import cats.syntax.all._
 import coop.rchain.casper.PrettyPrinter
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
+import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueTypedStore
 
 import scala.collection.immutable.SortedMap
-import cats.effect.Ref
 
 object BlockMetadataStore {
   def apply[F[_]: Sync: Log](
-      blockMetadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata]
+      blockMetadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata],
+      lfsSetStore: KeyValueTypedStore[F, BlockHash, Unit]
   ): F[BlockMetadataStore[F]] =
     for {
-      _ <- Log[F].info("Building in-memory blockMetadataStore.")
+      lfsSet <- lfsSetStore.toMap.map(_.keySet)
+      _      <- Log[F].info(s"Loading blocks metadata (${lfsSet.size} blocks).")
       // Iterate over block metadata store and collect info for in-memory cache
-      blockInfoMap <- blockMetadataStore.collect {
-                       case (hash, metaData) =>
-                         (hash, blockMetadataToInfo(metaData()))
-                     }
-      _           <- Log[F].info("Reading data from blockMetadataStore done.")
-      dagState    = recreateInMemoryState(blockInfoMap.toMap)
+      blockInfoMap <- blockMetadataStore
+                       .get(lfsSet.toList)
+                       .map(_.flatten.map(x => x.blockHash -> blockMetadataToInfo(x)).toMap)
+      _ <- new FatalError(s"Missing block metadata required").raiseError
+            .whenA(blockInfoMap.size != lfsSet.size)
+      _           <- Log[F].info("Loading blocks metadata done.")
+      dagState    = recreateInMemoryState(blockInfoMap)
       _           <- Log[F].info("Successfully built in-memory blockMetadataStore.")
       dagStateRef <- Ref[F].of(dagState)
-    } yield new BlockMetadataStore[F](blockMetadataStore, dagStateRef)
+    } yield new BlockMetadataStore[F](blockMetadataStore, lfsSetStore, dagStateRef)
 
   final case class BlockMetadataStoreInconsistencyError(message: String) extends Exception(message)
 
@@ -48,6 +51,7 @@ object BlockMetadataStore {
 
   class BlockMetadataStore[F[_]: Monad](
       private val store: KeyValueTypedStore[F, BlockHash, BlockMetadata],
+      val lfsSetStore: KeyValueTypedStore[F, BlockHash, Unit], // store for latest messages
       private val dagState: Ref[F, DagState]
   ) {
     def add(block: BlockMetadata): F[Unit] =
@@ -61,6 +65,9 @@ object BlockMetadataStore {
 
         // Update persistent block metadata store
         _ <- store.put(block.blockHash, block)
+
+        // add to LFS set. It will be removed when GC event happens.
+        _ <- lfsSetStore.put(block.blockHash, ())
       } yield ()
 
     def get(hash: BlockHash): F[Option[BlockMetadata]] = store.get1(hash)

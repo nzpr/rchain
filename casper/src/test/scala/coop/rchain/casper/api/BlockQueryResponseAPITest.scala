@@ -1,5 +1,6 @@
 package coop.rchain.casper.api
 
+import cats.Monoid
 import cats.effect.{IO, Ref, Sync}
 import cats.effect.testing.scalatest.AsyncIOSpec
 import cats.syntax.all._
@@ -244,9 +245,15 @@ class BlockQueryResponseAPITest
         val newHeightMap = s.heightMap + (b.blockNumber -> (s.heightMap
           .getOrElse(b.blockNumber, Set.empty) + b.blockHash))
 
-        val seen = b.justifications
-          .flatMap(h => s.dagMessageState.msgMap(h).seen)
-          .toSet ++ b.justifications + b.blockHash
+        val seen = {
+          val parents = b.justifications.map(s.dagMessageState.msgMap).toSet
+          val parentsAsSeen = DagSeen(
+            parents
+              .map(x => x.sender -> Range.inclusive(x.senderSeq.toInt, x.senderSeq.toInt))
+              .toMap
+          )
+          Monoid[DagSeen[Validator]].combineAll(parents.map(_.seen) + parentsAsSeen)
+        }
 
         val newMsgMap = s.dagMessageState.msgMap + (b.blockHash -> toMessage(b, seen))
 
@@ -279,7 +286,7 @@ class BlockQueryResponseAPITest
   // Default args only available for public method in Scala 2.12 (https://github.com/scala/bug/issues/12168)
   def toMessage(
       m: BlockMessage,
-      seen: Set[BlockHash] = Set.empty[BlockHash]
+      seen: DagSeen[Validator] = Monoid[DagSeen[Validator]].empty
   ): Message[BlockHash, Validator] =
     Message[BlockHash, Validator](
       m.blockHash,

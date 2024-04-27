@@ -1,6 +1,9 @@
 package coop.rchain.blockstorage.dag
 
+import cats.kernel.Monoid
 import cats.syntax.all._
+import coop.rchain.sdk.dag.View
+import coop.rchain.sdk.dag.View.IncludePolicy
 import coop.rchain.sdk.syntax.all.mapSyntax
 
 trait MessageMapSyntax {
@@ -17,10 +20,35 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
   /**
     * Gets the slice of messages between upper and lower bound (including upper bound messages)
     */
-  def between(upperBound: Set[Msg], lowerBound: Set[Msg]): Set[Msg] = {
-    val upperSeen = upperBound.flatMap(_.seen.map(msgMap))
-    val lowerSeen = lowerBound.flatMap(_.seen.map(msgMap))
-    upperSeen -- lowerSeen
+  def between(
+      upperBound: Set[M],
+      lowerBound: Set[M],
+      lookup: (S, Long) => M,
+      includePolicy: IncludePolicy
+  ): Set[M] = {
+    val upperAsSeen = View[S](
+      upperBound
+        .map(msgMap.getUnsafe)
+        .map(x => x.sender -> Range.inclusive(x.senderSeq.toInt, x.senderSeq.toInt))
+        .toMap
+    )
+    val bottomAsSeen = View[S](
+      lowerBound
+        .map(msgMap.getUnsafe)
+        .map(x => x.sender -> Range.inclusive(x.senderSeq.toInt, x.senderSeq.toInt))
+        .toMap
+    )
+    View
+      .diff(
+        Monoid[View[S]].combineAll(upperBound.map(msgMap.getUnsafe).map(_.seen) + upperAsSeen),
+        Monoid[View[S]].combineAll(lowerBound.map(msgMap.getUnsafe).map(_.seen) + bottomAsSeen),
+        includePolicy
+      )
+      .seen
+      .iterator
+      .flatMap { case (v, r) => r.map(_.toLong).map(v -> _) }
+      .map(lookup.tupled)
+      .toSet
   }
 
   /**
