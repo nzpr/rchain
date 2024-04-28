@@ -61,9 +61,10 @@ final case class BlockReceiverState[MId: Show] private (
     */
   def beginStored(id: MId): (BlockReceiverState[MId], Boolean) = {
     // If state is not known or pending request, it's expected so continue with receiving
+    val alreadyStored = blocksSt.contains(id)
     val expectedReceive =
       receiveSt.get(id).collect { case Requested => true; case _ => false }.getOrElse(true)
-    if (expectedReceive) {
+    if (expectedReceive && !alreadyStored) {
       // Update state to begin received status
       val newReceiveSt = receiveSt + ((id, BeginStoreBlock))
       (copy(receiveSt = newReceiveSt), true)
