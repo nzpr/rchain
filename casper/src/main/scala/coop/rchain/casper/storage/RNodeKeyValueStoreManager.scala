@@ -35,6 +35,7 @@ object RNodeKeyValueStoreManager {
       (Db("blocks"), blockStorageEnvConfig),
       // Block metadata storage
       (Db("block-metadata"), dagStorageEnvConfig),
+      (Db("lfs-set"), dagStorageEnvConfig),
       (Db("fringe-data"), dagStorageEnvConfig),
       (Db("finalized-store"), dagStorageEnvConfig),
       // Deploys from blocks

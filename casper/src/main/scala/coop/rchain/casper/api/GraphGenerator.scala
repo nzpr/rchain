@@ -211,7 +211,7 @@ object GraphGenerator {
     val fringes = blocks
       .foldLeft(initFringeMap) {
         case (acc, b) =>
-          val fringe     = b.fringe.map(blockMap)
+          val fringe     = b.fringe.flatMap(blockMap.get)
           val seenFringe = acc.getOrElse(fringe, Set())
           acc + ((fringe, seenFringe + b))
       }

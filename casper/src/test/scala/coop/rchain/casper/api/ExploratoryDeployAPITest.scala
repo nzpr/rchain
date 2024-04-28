@@ -21,6 +21,7 @@ import coop.rchain.models._
 import coop.rchain.models.blockImplicits.getRandomBlock
 import coop.rchain.models.syntax._
 import coop.rchain.rspace.hashing.Blake2b256Hash
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 import org.mockito.cats.IdiomaticMockitoCats
 import org.mockito.{ArgumentMatchersSugar, IdiomaticMockito}
@@ -85,7 +86,7 @@ class ExploratoryDeployAPITest
         bondsMap,
         blocks.get(blocks.indexOf(block) - 1L).map(b => Set(b.blockHash)).getOrElse(Set.empty),
         Set.empty,
-        blocks.take(blocks.indexOf(block) + 1).map(_.blockHash).toSet
+        View.semigroupDagSeen.empty
       )
 
     implicit val bds = mock[BlockDagStorage[IO]]
@@ -122,7 +123,8 @@ class ExploratoryDeployAPITest
           Set.empty,
           Set.empty
         )
-      )
+      ),
+      Map()
     )
 
     val term        = "new return in { for (@data <- @\"store\") {return!(data)}}"

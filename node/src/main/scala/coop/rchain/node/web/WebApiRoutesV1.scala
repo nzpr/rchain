@@ -89,6 +89,7 @@ final case class AdminWebApiRoutesV1[F[_]: Concurrent](
 
   val adminRoutes = routesFromEndpoints(
     // Propose
-    propose.implementedByEffect(const(adminWebApi.propose))
+    propose.implementedByEffect(const(adminWebApi.propose)),
+    vDag.implementedByEffect(adminWebApi.vDag(_: Int, 0, showJs = true))
   )
 }

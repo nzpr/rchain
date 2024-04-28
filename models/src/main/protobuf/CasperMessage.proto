@@ -205,9 +205,13 @@ message StoreItemsMessageProto {
 // --------- End Last finalized state  --------
 
 // --------- Internal types ---------
+message ViewProto {
+  bytes validator = 1;
+  int64 seqStart = 2;
+  int64 seqEnd = 3;
+}
 
 message BlockMetadataProto {
-  // BlockMessage data
   bytes blockHash               = 1;
   int64 blockNum                = 2;
   bytes sender                  = 3;
@@ -222,6 +226,8 @@ message BlockMetadataProto {
   bytes fringeStateHash         = 31;
   // Fringe where/when block is finalized
   bytes memberOfFringe          = 40;
+  // View of the block
+  repeated ViewProto view       = 41 [(scalapb.field).collection_type="List"];
 }
 
 message FringeDataProto {

@@ -129,7 +129,7 @@ class BlockReceiverEffectsSpec
   }
 
   private def blockDagStorageMock[F[_]: Applicative]: BlockDagStorage[F] = {
-    val emptyDag = DagRepresentation(Set(), Map(), SortedMap(), DagMessageState(), Map())
+    val emptyDag = DagRepresentation(Set(), Map(), SortedMap(), DagMessageState(), Map(), Map())
     mock[BlockDagStorage[F]].getRepresentation returnsF emptyDag
   }
 

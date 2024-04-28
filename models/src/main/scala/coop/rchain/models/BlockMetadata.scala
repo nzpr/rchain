@@ -1,7 +1,6 @@
 package coop.rchain.models
 
 import cats.syntax.all._
-import com.google.protobuf
 import com.google.protobuf.ByteString
 import coop.rchain.casper.protocol._
 import coop.rchain.models.BlockHash.BlockHash
@@ -10,6 +9,7 @@ import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.syntax._
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.history.instances.RadixHistory
+import coop.rchain.sdk.dag.View
 
 final case class BlockMetadata(
     blockHash: BlockHash,
@@ -25,7 +25,8 @@ final case class BlockMetadata(
     fringe: Set[BlockHash],
     fringeStateHash: StateHash,
     // Fringe (fringe hash) where/when block is finalized
-    memberOfFringe: Option[Blake2b256Hash]
+    memberOfFringe: Option[Blake2b256Hash],
+    view: View[Validator]
 ) {
   // BlockMetadata is uniquely identified with BlockHash
   // - overridden hashCode is to be more performant when used in Set or Map
@@ -44,7 +45,8 @@ object BlockMetadata {
     b.validationFailed,
     b.fringe.toSet,
     b.fringeStateHash,
-    Option(b.memberOfFringe).filterNot(_.isEmpty).map(_.toBlake2b256Hash)
+    Option(b.memberOfFringe).filterNot(_.isEmpty).map(_.toBlake2b256Hash),
+    View(b.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap)
   )
 
   def toProto(b: BlockMetadata) = BlockMetadataProto(
@@ -58,7 +60,8 @@ object BlockMetadata {
     b.validationFailed,
     b.fringe.toList,
     b.fringeStateHash,
-    b.memberOfFringe.map(_.toByteString).getOrElse(ByteString.EMPTY)
+    b.memberOfFringe.map(_.toByteString).getOrElse(ByteString.EMPTY),
+    b.view.seen.toList.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }
   )
 
   def fromBytes(bytes: Array[Byte]): BlockMetadata =
@@ -66,6 +69,7 @@ object BlockMetadata {
 
   def toBytes(b: BlockMetadata) = BlockMetadata.toProto(b).toByteArray
 
+  // TODO consider default values to be put into BlockMessage to make LFS being reconstructed only from blocks feasible
   def fromBlock(b: BlockMessage): BlockMetadata =
     BlockMetadata(
       b.blockHash,
@@ -78,6 +82,7 @@ object BlockMetadata {
       validationFailed = false,
       fringe = Set(),
       fringeStateHash = RadixHistory.emptyRootHash.toByteString,
-      memberOfFringe = none
+      memberOfFringe = none,
+      view = View.semigroupDagSeen.empty
     )
 }

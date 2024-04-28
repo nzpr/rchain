@@ -17,11 +17,13 @@ import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockHash => _, _}
-import coop.rchain.sdk.error.FatalError
-import coop.rchain.shared._
-import cats.effect.Temporal
 import coop.rchain.rspace.hashing.Blake2b256Hash
+import coop.rchain.sdk.error.FatalError
+import coop.rchain.sdk.syntax.all.mapSyntax
+import coop.rchain.shared._
 import coop.rchain.shared.syntax.sharedSyntaxKeyValueTypedStore
+
+import scala.concurrent.duration.DurationInt
 
 final case class ParsingError(details: String)
 
@@ -95,11 +97,20 @@ object MultiParentCasper {
       newFringeResult <- newFringeHashes.traverse { fringe =>
                           val mergeFringe = {
                             val (mScope, baseOpt) =
-                              MergeScope.fromDag(fringe, prevFringeHashes, dag.childMap, msgMap)
+                              MergeScope.fromDag(
+                                fringe,
+                                prevFringeHashes,
+                                dag.childMap,
+                                msgMap,
+                                dag.hashLookup.getUnsafe
+                              )
                             for {
-                              _ <- new Exception(
-                                    s"Multiple parents detected. Merging is not supported"
-                                  ).raiseError[F, (Blake2b256Hash, Set[ByteString])]
+                              _ <- Log[F].error(
+                                    s"Multiple parents detected for a message (${fringe
+                                      .map(_.toHexString.take(8))}). Merging is not supported"
+                                  )
+                              // Sleep instead iof throwing exception to be able to query node.
+                              _ <- Sync[F].sleep(Int.MaxValue.seconds)
                               baseStateOpt <- baseOpt.traverse { h =>
                                                BlockStore[F]
                                                  .getUnsafe(h)
@@ -149,18 +160,22 @@ object MultiParentCasper {
                                        .getUnsafe(parent)
                                        .map(_.postStateHash)
                                        .map(x => (x.toBlake2b256Hash, Set.empty[ByteString]))
-                                   case _ =>
+                                   case ps =>
                                      val (mScope, baseOpt) =
                                        MergeScope.fromDag(
                                          parentHashes,
                                          newFringe,
                                          dag.childMap,
-                                         msgMap
+                                         msgMap,
+                                         dag.hashLookup.getUnsafe
                                        )
                                      for {
-                                       _ <- new Exception(
-                                             s"Multiple parents detected. Merging is not supported"
-                                           ).raiseError[F, (Blake2b256Hash, Set[ByteString])]
+                                       _ <- Log[F].error(
+                                             s"Multiple parents detected for a message (${ps
+                                               .map(_.toHexString.take(8))}). Merging is not supported"
+                                           )
+                                       // Sleep instead iof throwing exception to be able to query node.
+                                       _ <- Sync[F].sleep(Int.MaxValue.seconds)
                                        baseStateOpt <- baseOpt.traverse { h =>
                                                         BlockStore[F]
                                                           .getUnsafe(h)
@@ -206,7 +221,8 @@ object MultiParentCasper {
 
     val validationProcess: EitherT[F, (BlockMetadata, InvalidBlock), BlockMetadata] =
       for {
-        _                                <- validateSummary
+        _ <- validateSummary
+        // compute view
         _                                <- EitherT.liftF(Span[F].mark("post-validation-block-summary"))
         validated                        <- EitherT.liftF(InterpreterUtil.validateBlockCheckpoint(block))
         (blockMetadata, validatedResult) = validated

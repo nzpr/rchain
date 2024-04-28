@@ -16,7 +16,9 @@ import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.merger.EventLogMergingLogic.NumberChannelsDiff
 import coop.rchain.rspace.merger.{ChannelChange, StateChange, StateChangeMerger}
 import coop.rchain.rspace.syntax._
+import coop.rchain.sdk.dag.View.IncludeTop
 import coop.rchain.sdk.dag.merging.ConflictResolutionLogic
+import coop.rchain.sdk.syntax.all.mapSyntax
 import coop.rchain.shared.{Log, Stopwatch}
 import scodec.bits.ByteVector
 
@@ -29,10 +31,16 @@ final case class MergeScope(finalScope: Set[BlockHash], conflictScope: Set[Block
 
 object MergeScope {
 
-  def minGenJs(jss: Set[BlockHash], dag: DagRepresentation): Set[BlockHash] =
-    jss.filterNot(
-      j => jss.exists(j2 => (dag.dagMessageState.msgMap(j2).seen - j2).contains(j))
-    )
+  def minGenJs(jss: Set[BlockHash], dag: DagRepresentation): Set[BlockHash] = {
+    val metas = jss.map(dag.dagMessageState.msgMap.getUnsafe).map(x => x.sender -> x).toMap
+    metas
+      .filterNot {
+        case (v, m) =>
+          metas.exists { case (_, m1) => m1.seen.seen.get(v).exists(_.contains(m.senderSeq.toInt)) }
+      }
+      .map(_._2.id)
+      .toSet
+  }
 
   def findSingleTip(fringe: Set[BlockHash], dag: DagRepresentation): Option[BlockHash] =
     minGenJs(fringe, dag).toList match {
@@ -53,34 +61,34 @@ object MergeScope {
       mergeFringe: Set[BlockHash],
       finalFringe: Set[BlockHash],
       childMap: Map[BlockHash, Set[BlockHash]],
-      dagData: Map[BlockHash, Message[BlockHash, Validator]]
+      dagData: Map[BlockHash, Message[BlockHash, Validator]],
+      lookup: ((Validator, Long)) => Set[BlockHash]
   ): (MergeScope, Option[BlockHash]) = {
     val pruneFringe = dagData.pruneFringe(finalFringe, childMap).map(_.id)
-    fromFringes(mergeFringe, finalFringe, pruneFringe, dagData)
+    def hl(v: Validator, sN: Long): BlockHash = {
+      val l = lookup((v, sN))
+      assert(l.size == 1, "Equivocations are not supported")
+      l.head
+    }
+    fromFringes(mergeFringe, finalFringe, pruneFringe, dagData, hl)
   }
 
   def fromFringes(
       mergeFringe: Set[BlockHash],
       finalFringe: Set[BlockHash],
       pruneFringe: Set[BlockHash],
-      dagData: Map[BlockHash, Message[BlockHash, Validator]]
+      dagData: Map[BlockHash, Message[BlockHash, Validator]],
+      lookup: (Validator, Long) => BlockHash
   ): (MergeScope, Option[BlockHash]) = {
-    val mergeFringeMsgs = mergeFringe.map(dagData)
-    val finalFringeMsgs = finalFringe.map(dagData)
-    val pruneFringeMsgs = pruneFringe.map(dagData)
 
     // Conflict scope
-    val cScope = dagData.between(mergeFringeMsgs, finalFringeMsgs)
+    val cScopeIds = dagData.between(mergeFringe, finalFringe, lookup, IncludeTop)
 
     // Final scope
-    val fScope = dagData.between(finalFringeMsgs, pruneFringeMsgs)
-
-    // Scope ids
-    val cScopeIds = cScope.map(_.id)
-    val fScopeIds = fScope.map(_.id)
+    val fScopeIds = dagData.between(finalFringe, pruneFringe, lookup, IncludeTop)
 
     // Find base message if final scope is empty (genesis merging scope)
-    val baseMsg = Option(fScope).filter(_.isEmpty).flatMap { _ =>
+    val baseMsg = Option(fScopeIds).filter(_.isEmpty).flatMap { _ =>
       val genesisOpt = dagData.findWithEmptyParents
       assert(genesisOpt.nonEmpty, "Final scope is empty but no genesis found.")
       genesisOpt.map(_.id)

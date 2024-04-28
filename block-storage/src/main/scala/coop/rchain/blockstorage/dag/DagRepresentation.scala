@@ -1,11 +1,12 @@
 package coop.rchain.blockstorage.dag
 
+import cats.kernel.Monoid
 import cats.syntax.all._
-import coop.rchain.blockstorage.syntax._
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockHash, FringeData}
+import coop.rchain.sdk.dag.View
 
 import scala.collection.immutable.SortedMap
 
@@ -26,11 +27,11 @@ final case class DagRepresentation(
     heightMap: SortedMap[Long, Set[BlockHash]],
     dagMessageState: DagMessageState[BlockHash, Validator],
     // In-memory cache for fringe data store (it should only include working range of blocks needed for finalization)
-    fringeStates: Map[Set[BlockHash], FringeData]
+    fringeStates: Map[Set[BlockHash], FringeData],
+    // Index for block hashes by validator and sequence number. Its a set to accommodate equivocations
+    hashLookup: Map[(Validator, Long), Set[BlockHash]]
 ) {
   lazy val latestFringe: Set[Message[BlockHash, Validator]] = dagMessageState.latestFringe
-
-  lazy val finalizedBlocksSet: Set[BlockHash] = latestFringe.flatMap(_.seen)
 
   lazy val latestBlockNumber: Long = heightMap.lastOption.map { case (h, _) => h + 1 }.getOrElse(0L)
 
@@ -43,7 +44,19 @@ final case class DagRepresentation(
 
   def children(blockHash: BlockHash): Option[Set[BlockHash]] = childMap.get(blockHash)
 
-  def isFinalized(blockHash: BlockHash): Boolean = finalizedBlocksSet.contains(blockHash)
+  import coop.rchain.sdk.syntax.all._
+  def isFinalized(blockHash: BlockHash): Boolean = {
+    val fringeAsSeen = View(
+      latestFringe
+        .map(x => x.sender -> Range.inclusive(x.senderSeq.toInt, x.senderSeq.toInt))
+        .toMap
+    )
+    val seenByFringe = Monoid[View[Validator]].combineAll(latestFringe.map(_.seen) + fringeAsSeen)
+    val msgMetaOpt   = dagMessageState.msgMap.get(blockHash)
+    msgMetaOpt.exists { msgMeta =>
+      seenByFringe.seen.get(msgMeta.sender).exists(_.contains(msgMeta.senderSeq.toInt))
+    }
+  }
 
   def topoSort(
       startBlockNumber: Long,

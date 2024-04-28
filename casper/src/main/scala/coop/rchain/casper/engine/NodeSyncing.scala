@@ -24,6 +24,8 @@ import fs2.concurrent.Channel
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration._
 import cats.effect.{Deferred, Ref, Temporal}
+import coop.rchain.models.Validator.Validator
+import coop.rchain.sdk.dag.View
 
 object NodeSyncing {
 
@@ -198,8 +200,11 @@ class NodeSyncing[F[_]
         _ <- Log[F].info(
               s"Adding ${PrettyPrinter.buildString(block, short = true)}."
             )
-        bmd = BlockMetadata.fromBlock(block)
-        _   <- BlockDagStorage[F].insert(bmd, block)
+        pMetas <- block.justifications.traverse(BlockDagStorage[F].lookupUnsafe)
+        // TODO remove this seen compute and put it directly into block, so LFS can be started
+        seen = View.compute[Validator, BlockMetadata](pMetas.toSet, _.sender, _.seqNum, _.view)
+        bmd  = BlockMetadata.fromBlock(block).copy(view = seen)
+        _    <- BlockDagStorage[F].insert(bmd, block)
       } yield ()
 
     for {

@@ -14,6 +14,7 @@ import coop.rchain.metrics.Span
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 import org.mockito.IdiomaticMockito
 import org.mockito.cats.IdiomaticMockitoCats
@@ -118,7 +119,7 @@ class LastFinalizedAPITest
       Set.empty,
       // DAG contains only one message, which is finalized and sees itself
       Set(knownHashBS),
-      Set(knownHashBS)
+      View.semigroupDagSeen.empty
     )
 
     bds.getRepresentation returnsF DagRepresentation(
@@ -126,7 +127,8 @@ class LastFinalizedAPITest
       Map.empty,
       SortedMap.empty,
       new DagMessageState(Set(msg), Map(msg.id -> msg)),
-      Map.empty
+      Map.empty,
+      Map((createSender, 0.toLong) -> Set(knownHashBS))
     )
 
     (log, sp, rm, bs, bds)

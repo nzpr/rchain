@@ -1,5 +1,6 @@
 package coop.rchain.casper.rholang
 
+import cats.data.EitherT
 import cats.effect.{Async, Sync}
 import cats.syntax.all._
 import com.google.protobuf.ByteString
@@ -31,6 +32,7 @@ import coop.rchain.rholang.interpreter.errors.InterpreterError
 import coop.rchain.shared.{Log, LogSource}
 import retry.{retryingOnFailures, RetryPolicies, Sleep}
 import cats.effect.Temporal
+import coop.rchain.sdk.dag.View
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -120,6 +122,8 @@ object InterpreterUtil {
           } yield result.map(_.isDefined)
         }
       }
+      pMetas <- block.justifications.traverse(BlockDagStorage[F].lookupUnsafe)
+      seen   = View.compute[Validator, BlockMetadata](pMetas.toSet, _.sender, _.seqNum, _.view)
     } yield {
       val bmd = BlockMetadata
         .fromBlock(block)
@@ -127,7 +131,8 @@ object InterpreterUtil {
           validated = true,
           validationFailed = result.isLeft || !result.toOption.get,
           fringe = preState.fringe,
-          fringeStateHash = preState.fringeState.bytes.toArray.toByteString
+          fringeStateHash = preState.fringeState.bytes.toArray.toByteString,
+          view = seen
         )
       (bmd, result)
     }

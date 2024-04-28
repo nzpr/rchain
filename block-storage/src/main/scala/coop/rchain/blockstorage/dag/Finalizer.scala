@@ -3,6 +3,7 @@ package coop.rchain.blockstorage.dag
 import cats.syntax.all._
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.sdk.consensus.Stake
+import coop.rchain.sdk.dag.View
 
 import scala.collection.compat.immutable.LazyList
 
@@ -29,7 +30,7 @@ final case class Message[M, S](
     parents: Set[M],
     fringe: Set[M],
     // Cache of seen message ids
-    seen: Set[M]
+    seen: View[S]
 ) {
   override def hashCode(): Int = this.id.hashCode()
 }
@@ -101,8 +102,10 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
               .map(msgMap)
               .map { p =>
                 // Find if next layer message is seen from any parent message
-                val selfMsgs     = p +: selfParents(p, finalized)
-                val seenByParent = selfMsgs.exists(_.seen.contains(minMsg.id))
+                val selfMsgs = p +: selfParents(p, finalized)
+                val seenByParent = selfMsgs.exists(
+                  _.seen.seen.get(minMsg.sender).exists(_.contains(minMsg.senderSeq.toInt))
+                )
                 (p.sender, seenByParent)
               }
               .filter(_._2)

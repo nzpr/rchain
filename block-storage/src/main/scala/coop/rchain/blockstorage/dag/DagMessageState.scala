@@ -2,6 +2,7 @@ package coop.rchain.blockstorage.dag
 
 import cats.syntax.all._
 import coop.rchain.blockstorage.syntax._
+import coop.rchain.sdk.dag.View
 
 object DagMessageState {
   def apply[M: Ordering, S: Ordering](): DagMessageState[M, S] =
@@ -34,8 +35,7 @@ final case class DagMessageState[M: Ordering, S: Ordering](
     val newFringeIds = newFringe.map(_.id)
 
     // Seen messages are all seen from justifications combined
-    val seenByParents = justifications.flatMap(_.seen)
-    val newSeen       = seenByParents + id
+    val newSeen = View.compute[S, Message[M, S]](justifications, _.sender, _.senderSeq, _.seen)
 
     // Create message, an immutable object with all fields calculated
     val justificationKeys = justifications.map(_.id)

@@ -1,5 +1,6 @@
 package coop.rchain.casper.api
 
+import cats.Monoid
 import cats.effect.{IO, Ref, Sync}
 import cats.effect.testing.scalatest.AsyncIOSpec
 import cats.syntax.all._
@@ -19,6 +20,7 @@ import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.blockImplicits.getRandomBlock
 import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockMetadata, FringeData}
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 import org.mockito.cats.IdiomaticMockitoCats
 import org.mockito.{ArgumentMatchersSugar, IdiomaticMockito, Mockito, MockitoSugar}
@@ -227,7 +229,8 @@ class BlockQueryResponseAPITest
             Set.empty,
             Set.empty
           )
-        )
+        ),
+        Map()
       )
     )
 
@@ -244,9 +247,15 @@ class BlockQueryResponseAPITest
         val newHeightMap = s.heightMap + (b.blockNumber -> (s.heightMap
           .getOrElse(b.blockNumber, Set.empty) + b.blockHash))
 
-        val seen = b.justifications
-          .flatMap(h => s.dagMessageState.msgMap(h).seen)
-          .toSet ++ b.justifications + b.blockHash
+        val seen = {
+          val parents = b.justifications.map(s.dagMessageState.msgMap).toSet
+          val parentsAsSeen = View(
+            parents
+              .map(x => x.sender -> Range.inclusive(x.senderSeq.toInt, x.senderSeq.toInt))
+              .toMap
+          )
+          Monoid[View[Validator]].combineAll(parents.map(_.seen) + parentsAsSeen)
+        }
 
         val newMsgMap = s.dagMessageState.msgMap + (b.blockHash -> toMessage(b, seen))
 
@@ -279,7 +288,7 @@ class BlockQueryResponseAPITest
   // Default args only available for public method in Scala 2.12 (https://github.com/scala/bug/issues/12168)
   def toMessage(
       m: BlockMessage,
-      seen: Set[BlockHash] = Set.empty[BlockHash]
+      seen: View[Validator] = Monoid[View[Validator]].empty
   ): Message[BlockHash, Validator] =
     Message[BlockHash, Validator](
       m.blockHash,

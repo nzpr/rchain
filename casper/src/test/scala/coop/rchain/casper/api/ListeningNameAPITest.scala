@@ -27,6 +27,7 @@ import org.scalatest._
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import cats.effect.testing.scalatest.AsyncIOSpec
+import coop.rchain.sdk.dag.View
 
 import scala.collection.immutable.SortedMap
 
@@ -158,7 +159,7 @@ class ListeningNameAPITest
       m.bonds,
       m.justifications.toSet,
       Set.empty,
-      Set(m.blockHash)
+      View.semigroupDagSeen.empty
     )
 
   private def createMocks[F[_]: Applicative]
@@ -190,7 +191,8 @@ class ListeningNameAPITest
       Map(m1.id    -> Set(m2.id, m3.id)),
       SortedMap(0L -> Set(m1.id), 1L -> Set(m2.id, m3.id)),
       new DagMessageState(Set(m2, m3), Map(m1.id -> m1, m2.id -> m2, m3.id -> m3)),
-      Map.empty
+      Map.empty,
+      Map()
     )
 
     (log, sp, rm, bs, bds)

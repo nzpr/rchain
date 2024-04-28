@@ -20,6 +20,7 @@ import coop.rchain.models.FringeData
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.blockImplicits.getRandomBlock
 import coop.rchain.models.syntax._
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 import coop.rchain.shared.scalatestcontrib._
 import org.mockito.cats.IdiomaticMockitoCats
@@ -27,8 +28,8 @@ import org.mockito.{ArgumentMatchersSugar, IdiomaticMockito}
 import org.scalatest.EitherValues
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
-import scala.collection.immutable.Seq
 
+import scala.collection.immutable.Seq
 import scala.collection.immutable.SortedMap
 
 class BondedStatusAPITest
@@ -143,7 +144,8 @@ class BondedStatusAPITest
           Set.empty,
           Set.empty
         )
-      )
+      ),
+      Map()
     )
 
     val bs = mock[BlockStore[F]]
@@ -166,7 +168,7 @@ class BondedStatusAPITest
       m.bonds,
       m.justifications.toSet,
       Set(m.blockHash),
-      Set(m.blockHash)
+      View.semigroupDagSeen.empty
     )
 
   private def bondedStatus[F[_]: Async: BlockDagStorage: BlockStore: Log: RuntimeManager: Span](

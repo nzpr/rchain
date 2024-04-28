@@ -20,6 +20,8 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.sdk.consensus.Stake
+import coop.rchain.sdk.dag.View
+import coop.rchain.sdk.dag.View.IncludeTop
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared.syntax._
 import coop.rchain.shared.Log
@@ -156,10 +158,15 @@ object Proposer {
         changeEpoch = nextBlockNum % epochLength == 0
         // attestation
         // no need to attest if nothing meaningful to finalize.
-        dag         <- BlockDagStorage[F].getRepresentation
-        seen        = dag.dagMessageState.msgMap(_: BlockHash).seen
-        conflictSet = parentHashes.flatMap(seen) -- preState.fringe.flatMap(seen)
-        hasDeploys  = (b: BlockMessage) => b.state.systemDeploys.nonEmpty || b.state.deploys.nonEmpty
+        dag <- BlockDagStorage[F].getRepresentation
+        conflictSet = dag.dagMessageState.msgMap
+          .between(
+            parentHashes,
+            preState.fringe,
+            (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head,
+            IncludeTop
+          )
+        hasDeploys = (b: BlockMessage) => b.state.systemDeploys.nonEmpty || b.state.deploys.nonEmpty
         nothingToFinalize = conflictSet.toList
           .traverse(BlockStore[F].getUnsafe)
           .map(!_.exists(hasDeploys))

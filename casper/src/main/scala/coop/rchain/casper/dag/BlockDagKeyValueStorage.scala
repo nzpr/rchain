@@ -1,6 +1,8 @@
 package coop.rchain.casper.dag
 
-import cats.effect.Async
+import cats.effect.std.Semaphore
+import cats.effect.{Async, Ref, Sync}
+import cats.kernel.Monoid
 import cats.syntax.all._
 import cats.{Monad, Show}
 import coop.rchain.blockstorage._
@@ -22,14 +24,15 @@ import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockMetadata, FringeData}
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.hashing.Blake2b256Hash.codecBlake2b256Hash
+import coop.rchain.sdk.dag.View
+import coop.rchain.sdk.dag.View.{IncludeBottom, IncludeTop}
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
 import fs2.Stream
 
 import scala.collection.concurrent.TrieMap
-import cats.effect.Ref
-import cats.effect.std.Semaphore
+import scala.collection.immutable.SortedMap
 
 final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
     representationState: Ref[F, DagRepresentation],
@@ -60,7 +63,8 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         deployHashes = block.state.deploys.map(_.deploy.sig)
         _            <- deployIndex.put(deployHashes.map(_ -> block.blockHash))
 
-        dagState <- representationState.get.map(_.dagMessageState)
+        dag      <- representationState.get
+        dagState = dag.dagMessageState
 
         // Store fringe data
         fringeHash = FringeData.fringeHash(blockMetadata.fringe)
@@ -68,13 +72,22 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
         prevFringeMsgs     = dagState.msgMap.latestFringe(justificationsMsgs)
         fringeMsgs         = blockMetadata.fringe.map(dagState.msgMap)
-        fringeDiff         = fringeMsgs.flatMap(_.seen) -- prevFringeMsgs.flatMap(_.seen)
+        fringeDiff = View
+          .diff(
+            Monoid[View[Validator]].combineAll(fringeMsgs.map(_.seen)),
+            Monoid[View[Validator]].combineAll(prevFringeMsgs.map(_.seen)),
+            IncludeTop
+          )
+          .seen
+          .map { case (v, r) => r.map(_.toLong).map(v -> _) }
+          .flatten
 
+        fringeDiffHashes = fringeDiff.toList.flatMap(dag.hashLookup).toSet
         // Fringe data object to store
         fringeData = FringeData(
           fringeHash,
           fringe = blockMetadata.fringe,
-          fringeDiff = fringeDiff,
+          fringeDiff = fringeDiffHashes,
           stateHash = blockMetadata.fringeStateHash.toBlake2b256Hash,
           rejectedDeploys = block.rejectedDeploys,
           rejectedBlocks = block.rejectedBlocks,
@@ -84,7 +97,7 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         _ <- fringeDataStore.put(fringeHash, fringeData)
 
         // Update block metadata members of finalized fringe
-        fringeDiffMetas        <- fringeDiff.toList.traverse(blockMetadataIndex.getUnsafe)
+        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
         fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
         _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
 
@@ -95,8 +108,13 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         dag <- representationState.updateAndGet { dr =>
                 // Update DAG messages state
                 val dagMsgSt       = dr.dagMessageState
-                val msg            = messageFromBlockMetadata(blockMetadata, dagMsgSt.msgMap, heightMap)
+                val msg            = messageFromBlockMetadata(blockMetadata)
                 val newDagMsgState = dagMsgSt.insertMsg(msg)
+
+                val newHashLookup = dr.hashLookup.updated(
+                  (msg.sender, msg.senderSeq),
+                  dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
+                )
 
                 // Update fringe data cache
                 // TODO: remove out of reach records (not needed for further finalization)
@@ -108,16 +126,23 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                   childMap,
                   heightMap,
                   newDagMsgState,
-                  fringeStates = newFringes
+                  fringeStates = newFringes,
+                  hashLookup = newHashLookup
                 )
               }
 
         // attempt to prune only when sender is the only outsider
-        lowestFringe            = dagState.msgMap.lowestFringe(dagState.latestMsgs).map(_.id)
-        outsiders               = dagState.latestMsgs.filter(_.fringe == lowestFringe).map(_.sender)
-        senderIsTheOnlyOutsider = outsiders == Set(blockMetadata.sender)
-        shouldPrune             = fringeDiff.nonEmpty && senderIsTheOnlyOutsider
-        _                       <- pruneDiff(dag.dagMessageState, dagState, childMap).whenA(shouldPrune)
+        // (this means all justifications already advanced the fringe compared to self justification)
+        // so no new valid (non equivocating) messages will reference what is about to be pruned
+        lowestFringe = dagState.msgMap.lowestFringe(dagState.latestMsgs).map(_.id)
+        outsiders    = dagState.latestMsgs.filter(_.fringe == lowestFringe).map(_.sender)
+        shouldPrune  = outsiders == Set(blockMetadata.sender)
+        _ <- pruneDiff(
+              dag.dagMessageState,
+              dagState,
+              childMap,
+              (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head
+            ).whenA(shouldPrune)
 
         _ <- removeExpiredFromPool(deployStore, dag).map(
               _.map((_, ())).foreach((expiredMap.update _).tupled)
@@ -152,14 +177,17 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
   def pruneDiff(
       newState: DagMessageState[BlockHash, Validator],
       curState: DagMessageState[BlockHash, Validator],
-      childMap: Map[BlockHash, Set[BlockHash]]
+      childMap: Map[BlockHash, Set[BlockHash]],
+      lookup: (Validator, Long) => BlockHash
   ): F[Unit] = {
-    val newLPF  = dbPruneFringe(newState, childMap)
-    val curLPF  = dbPruneFringe(curState, childMap)
-    val toPrune = (newState.msgMap.between(newLPF, curLPF) ++ curLPF).map(_.id)
+    val newLPF = dbPruneFringe(newState, childMap)
+    val curLPF = dbPruneFringe(curState, childMap)
+    val toPrune = newState.msgMap.between(newLPF.map(_.id), curLPF.map(_.id), lookup, IncludeBottom) ++
+      curLPF.map(_.id)
 
-    toPrune.toList.foreach(BlockIndex.cache.remove)
-    Log[F].info(s"Pruned ${toPrune.size} merging indices, new size: ${BlockIndex.cache.size}")
+    Sync[F].delay(toPrune.toList.foreach(BlockIndex.cache.remove)) *>
+      blockMetadataIndex.lfsSetStore.delete(toPrune.toList) *>
+      Log[F].info(s"Pruned ${toPrune.size} blocks, new index size: ${BlockIndex.cache.size}")
   }
 
   override def lookup(blockHash: BlockHash): F[Option[BlockMetadata]] =
@@ -184,13 +212,15 @@ object BlockDagKeyValueStorage {
 
   private final case class DagStores[F[_]](
       metadata: BlockMetadataStore[F],
-      metadataDb: KeyValueTypedStore[F, BlockHash, BlockMetadata],
+      lfsSet: KeyValueTypedStore[F, BlockHash, Unit], // set of blocks metadata required to start the node
       fringeDataDb: KeyValueTypedStore[F, Blake2b256Hash, FringeData],
       deploys: KeyValueTypedStore[F, DeployId, BlockHash],
       deployPool: KeyValueTypedStore[F, DeployId, Signed[DeployData]]
   )
 
-  private def createStores[F[_]: Async: Log: Metrics](kvm: KeyValueStoreManager[F]) = {
+  private def createStores[F[_]: Async: Log: Metrics](
+      kvm: KeyValueStoreManager[F]
+  ): F[DagStores[F]] = {
     implicit val kvm_ = kvm
     for {
       // Block metadata map
@@ -199,7 +229,14 @@ object BlockDagKeyValueStorage {
                           codecBlockHash,
                           codecBlockMetadata
                         )
-      blockMetadataStore <- BlockMetadataStore[F](blockMetadataDb)
+
+      lfsDb <- KeyValueStoreManager[F].database[BlockHash, Unit](
+                "lfs-set",
+                codecBlockHash,
+                scodec.Codec[Unit]
+              )
+
+      blockMetadataStore <- BlockMetadataStore[F](blockMetadataDb, lfsDb)
 
       // Fringe data map
       fringeDataDb <- KeyValueStoreManager[F].database[Blake2b256Hash, FringeData](
@@ -223,7 +260,7 @@ object BlockDagKeyValueStorage {
                      )
     } yield DagStores(
       blockMetadataStore,
-      blockMetadataDb,
+      lfsDb,
       fringeDataDb,
       deployIndexDb,
       deployPoolDb
@@ -243,35 +280,41 @@ object BlockDagKeyValueStorage {
           dagSet    <- metadata.dagSet
           childMap  <- metadata.childMapData
           heightMap <- metadata.heightMap
+          lfsSet    <- metadata.lfsSetStore.toMap.map(_.keySet)
 
           // Fill message map from BlockMetadata
-          // TODO: include only non-finalized block
           dmsSt <- Ref.of(DagMessageState[BlockHash, Validator]())
           fsSt  <- Ref.of(Map[Set[BlockHash], FringeData]())
-          i     = heightMap.values.flatten.iterator
-          initMsgMapJob = Stream.fromIterator(i, 1).evalMap { hash =>
+          hlSt  <- Ref.of(Map[(Validator, Long), Set[BlockHash]]())
+
+          initMsgMapJob = Stream.fromIterator(lfsSet.iterator, 1).evalMap { hash =>
             for {
               ds     <- dmsSt.get
               fs     <- fsSt.get
+              hl     <- hlSt.get
               msgMap = ds.msgMap
               updateMessage = for {
                 block <- metadata.getUnsafe(hash)
-                msg   = messageFromBlockMetadata(block, msgMap, heightMap)
+                msg   = messageFromBlockMetadata(block)
                 newDs = ds.insertMsg(msg)
 
                 fringeDataCached = fs.contains(msg.fringe)
                 newFs <- if (!fringeDataCached) {
-                          implicit val showHash = Show.show[Blake2b256Hash](_.bytes.toHex)
-                          val fringeHash        = FringeData.fringeHash(msg.fringe)
+                          implicit val showHash: Show[Blake2b256Hash] =
+                            Show.show[Blake2b256Hash](_.bytes.toHex)
+                          val fringeHash = FringeData.fringeHash(msg.fringe)
                           stores.fringeDataDb
                             .getUnsafe(fringeHash)
                             .map(fd => fs + ((msg.fringe, fd)))
                         } else {
                           fs.pure[F]
                         }
+                newHl = hl + ((msg.sender, msg.senderSeq) -> (hl
+                  .getOrElse((msg.sender, msg.senderSeq), Set.empty) + hash))
 
                 _ <- dmsSt.set(newDs)
                 _ <- fsSt.set(newFs)
+                _ <- hlSt.set(newHl)
               } yield ()
 
               // Check if already created
@@ -283,7 +326,15 @@ object BlockDagKeyValueStorage {
           _            <- initMsgMapJob.compile.drain
           dagMsgsState <- dmsSt.get
           fringeStates <- fsSt.get
-        } yield DagRepresentation(dagSet, childMap, heightMap, dagMsgsState, fringeStates)
+          hashLookup   <- hlSt.get
+        } yield DagRepresentation(
+          dagSet,
+          childMap,
+          heightMap,
+          dagMsgsState,
+          fringeStates,
+          hashLookup
+        )
       }
       stRef <- Ref.of[F, DagRepresentation](initST)
     } yield new BlockDagKeyValueStorage[F](
@@ -296,29 +347,17 @@ object BlockDagKeyValueStorage {
     )
 
   private def messageFromBlockMetadata(
-      block: BlockMetadata,
-      msgMap: Map[BlockHash, Message[BlockHash, Validator]],
-      heightMap: Map[Long, Set[BlockHash]]
-  ) = {
-    val parents = block.justifications
-
-    val highestParent = parents.map(msgMap(_).height).maxOption.getOrElse(0L)
-    val truncateRange = 0L to Math.max(highestParent - 100, 0L)
-    val toTruncate    = truncateRange.flatMap(heightMap.get).flatten.toSet
-
-    // Seen messages are all seen from justifications combined
-    val seen = parents.map(msgMap).flatMap(_.seen) + block.blockHash -- toTruncate
-    Message(
-      id = block.blockHash,
-      height = block.blockNum,
-      sender = block.sender,
-      senderSeq = block.seqNum,
-      bondsMap = block.bondsMap,
-      parents = parents,
-      fringe = block.fringe,
-      seen = seen
-    )
-  }
+      block: BlockMetadata
+  ): Message[BlockHash, Validator] = Message(
+    id = block.blockHash,
+    height = block.blockNum,
+    sender = block.sender,
+    senderSeq = block.seqNum,
+    bondsMap = block.bondsMap,
+    parents = block.justifications,
+    fringe = block.fringe,
+    seen = block.view
+  )
 
   def removeExpiredFromPool[F[_]: Monad](
       deployStore: KeyValueTypedStore[F, DeployId, Signed[DeployData]],
