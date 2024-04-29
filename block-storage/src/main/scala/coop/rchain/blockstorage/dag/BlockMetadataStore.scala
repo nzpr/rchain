@@ -6,6 +6,7 @@ import cats.syntax.all._
 import coop.rchain.casper.PrettyPrinter
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
+import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
@@ -25,8 +26,9 @@ object BlockMetadataStore {
       blockInfoMap <- blockMetadataStore
                        .get(lfsSet.toList)
                        .map(_.flatten.map(x => x.blockHash -> blockMetadataToInfo(x)).toMap)
-      _ <- new FatalError(s"Missing block metadata required").raiseError
-            .whenA(blockInfoMap.size != lfsSet.size)
+      _ <- new FatalError(
+            s"Missing block metadata required: ${(lfsSet -- blockInfoMap.keySet).map(_.toHexString.take(8))}"
+          ).raiseError.whenA(blockInfoMap.size != lfsSet.size)
       _           <- Log[F].info("Loading blocks metadata done.")
       dagState    = recreateInMemoryState(blockInfoMap)
       _           <- Log[F].info("Successfully built in-memory blockMetadataStore.")
