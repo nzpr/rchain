@@ -5,7 +5,7 @@ import cats.effect.{Async, Sync}
 import cats.syntax.all._
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
-import coop.rchain.blockstorage.dag.BlockDagStorage
+import coop.rchain.blockstorage.dag.{BlockDagStorage, DagRepresentation}
 import coop.rchain.casper.protocol.BlockMessage
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.{PrettyPrinter, Validate}
@@ -221,10 +221,9 @@ object BlockReceiver {
     }
 
     // Check if block should be stored
-    def checkIfKnown(b: BlockMessage): F[Boolean] =
-      BlockDagStorage[F].getRepresentation.map { dag =>
-        dag.contains(b.blockHash) //dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
-      }
+    def checkIfKnown(b: BlockMessage, dag: DagRepresentation): F[Boolean] =
+      Sync[F].delay(dag.contains(b.blockHash))
+    //dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
 
     def requestMissingDependencies(deps: Set[BlockHash]): F[Unit] =
       deps.toList.traverse_(
@@ -246,7 +245,7 @@ object BlockReceiver {
           // Start block checking, mark begin of checking in the state (begin received "transaction")
           val shouldCheck = state.modify(_.beginStored(block.blockHash))
           // Save block to store, mark end of checking in the state (end received "transaction")
-          val markReceivedAndStore =
+          def markReceivedAndStore(dag: DagRepresentation) =
             for {
               // Save block to block store, resolve parents to request
               blockStored <- BlockStore[F].contains(block.blockHash)
@@ -256,7 +255,6 @@ object BlockReceiver {
                           .traverse { hash =>
                             BlockStore[F].contains(hash).not.map((hash, _))
                           }
-              dag <- BlockDagStorage[F].getRepresentation
               pendingRequests <- state.modify(
                                   _.endStored(
                                     block.blockHash,
@@ -268,7 +266,6 @@ object BlockReceiver {
               _ <- BlockRetriever[F].ackReceived(block.blockHash)
 
               // Check if block have all dependencies in the DAG
-              dag        <- BlockDagStorage[F].getRepresentation
               hasAllDeps = block.justifications.forall(dag.contains)
 
               // If replay was interrupted, block was stored but not validated or added to the DAG.
@@ -282,12 +279,15 @@ object BlockReceiver {
                       sendToValidate(parentsToValidate).whenA(parentsToValidate.nonEmpty)
                   }
             } yield ()
+
           for {
-            isOfInterest <- checkIfKnown(block).not &&^ shouldCheck
+            // get dag snapshot
+            dag          <- BlockDagStorage[F].getRepresentation
+            isOfInterest <- checkIfKnown(block, dag).not &&^ shouldCheck
             // Log if block is ignored
             _ <- logNotOfInterest(block).unlessA(isOfInterest)
             // Save to store if block is of interest and send request for missing dependencies
-            _ <- markReceivedAndStore.whenA(isOfInterest)
+            _ <- markReceivedAndStore(dag).whenA(isOfInterest)
           } yield ()
         }
 
