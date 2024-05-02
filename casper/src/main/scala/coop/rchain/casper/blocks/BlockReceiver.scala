@@ -15,6 +15,7 @@ import coop.rchain.shared.syntax._
 import fs2.Stream
 import fs2.concurrent.Channel
 import cats.effect.Ref
+import coop.rchain.models.syntax.modelsSyntaxByteString
 
 sealed trait RecvStatus
 // Begin checking and storing block
@@ -226,9 +227,11 @@ object BlockReceiver {
     //dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
 
     def requestMissingDependencies(deps: Set[BlockHash]): F[Unit] =
-      deps.toList.traverse_(
-        BlockRetriever[F].admitHash(_, admitHashReason = BlockRetriever.MissingDependencyRequested)
-      )
+      Log[F].debug(s"Requesting missing dependencies: ${deps.map(_.toHexString.take(8))}") *>
+        deps.toList.traverse_(
+          BlockRetriever[F]
+            .admitHash(_, admitHashReason = BlockRetriever.MissingDependencyRequested)
+        )
 
     def sendToValidate(hashes: List[BlockHash]): F[Unit] = hashes.traverse_ { hash =>
       BlockStore[F].getUnsafe(hash).flatMap(putToIncomingQueue)
@@ -266,16 +269,38 @@ object BlockReceiver {
               _ <- BlockRetriever[F].ackReceived(block.blockHash)
 
               // Check if block have all dependencies in the DAG
-              hasAllDeps = block.justifications.forall(dag.contains)
+              missingDeps = block.justifications.filterNot(dag.contains)
 
               // If replay was interrupted, block was stored but not validated or added to the DAG.
               // Validation needs to be restarted for such blocks
-              parentsToValidate <- block.justifications.filterA(notValidated[F])
+              parentsToValidate <- block.justifications.filterA(notValidated[F](_, dag))
 
-              _ <- if (hasAllDeps) {
-                    receiverOutputQueue.trySend(block.blockHash)
+              _ <- if (missingDeps.isEmpty) {
+                    Log[F].debug(
+                      s"Deps satisfied for ${block.blockHash.toHexString.take(8)}. Sending to validation."
+                    ) *>
+                      receiverOutputQueue
+                        .trySend(block.blockHash)
+                        .flatMap {
+                          _.leftTraverse { _ =>
+                            Log[F].debug(
+                              s"Unable to send to receiverOutputQueue, channel is closed."
+                            )
+                          }
+                        }
+                        .flatMap(
+                          _.traverse(
+                            _ =>
+                              Log[F].debug(
+                                s"${block.blockHash.toHexString.take(8)} sent to receiverOutputQueue."
+                              )
+                          )
+                        )
                   } else {
-                    requestMissingDependencies(pendingRequests).whenA(pendingRequests.nonEmpty) *>
+                    Log[F].debug(
+                      s"Deps missing for ${block.blockHash.toHexString.take(8)}: $missingDeps."
+                    ) *>
+                      requestMissingDependencies(pendingRequests).whenA(pendingRequests.nonEmpty) *>
                       sendToValidate(parentsToValidate).whenA(parentsToValidate.nonEmpty)
                   }
             } yield ()
@@ -310,6 +335,6 @@ object BlockReceiver {
     }
   }
 
-  def notValidated[F[_]: Async: BlockStore: BlockDagStorage](hash: BlockHash): F[Boolean] =
-    BlockStore[F].contains(hash) &&^ BlockDagStorage[F].getRepresentation.map(!_.contains(hash))
+  def notValidated[F[_]: Async: BlockStore](hash: BlockHash, dag: DagRepresentation): F[Boolean] =
+    BlockStore[F].contains(hash) &&^ (!dag.contains(hash)).pure
 }

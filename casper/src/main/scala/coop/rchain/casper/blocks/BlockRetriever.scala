@@ -15,6 +15,7 @@ import coop.rchain.shared.Log
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.FiniteDuration
 import cats.effect.{Clock, Ref, Temporal}
+import coop.rchain.models.syntax.modelsSyntaxByteString
 
 /**
   * BlockRetriever makes sure block is received once Casper request it.
@@ -194,7 +195,8 @@ object BlockRetriever {
                     s"Adding ${PrettyPrinter.buildString(hash)} hash to RequestedBlocks because" +
                       s" of $admitHashReason."
                   )
-                case Ignore => ().pure[F]
+                case Ignore =>
+                  Log[F].debug(s"Ignoring ${hash.toHexString}. ")
               }
           _ <- if (result.broadcastRequest) CommUtil[F].broadcastHasBlockRequest(hash)
               else ().pure[F]

@@ -270,7 +270,8 @@ class NodeRunning[F[_]
     case HasBlock(blockHash) =>
       val processKnownBlock =
         for {
-          blockNotValidated <- BlockReceiver.notValidated(blockHash)
+          dag               <- BlockDagStorage[F].getRepresentation
+          blockNotValidated <- BlockReceiver.notValidated(blockHash, dag)
           _ <- (BlockStore[F].getUnsafe(blockHash) >>= incomingBlocksQueue.send)
                 .whenA(blockNotValidated)
         } yield ()
