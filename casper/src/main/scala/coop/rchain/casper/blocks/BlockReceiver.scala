@@ -186,7 +186,8 @@ object BlockReceiver {
       incomingBlocksStream: Stream[F, BlockMessage],
       finishedProcessingStream: Stream[F, BlockMessage],
       confShardName: String,
-      putToIncomingQueue: BlockMessage => F[Unit]
+      putToIncomingQueue: BlockMessage => F[Unit],
+      putToValidatedQueue: BlockMessage => F[Unit]
   ): F[Stream[F, BlockHash]] = {
 
     def blockStr(b: BlockMessage) = PrettyPrinter.buildString(b, short = true)
@@ -305,15 +306,19 @@ object BlockReceiver {
                   }
             } yield ()
 
-          for {
-            // get dag snapshot
-            dag          <- BlockDagStorage[F].getRepresentation
-            isOfInterest <- checkIfKnown(block, dag).not &&^ shouldCheck
-            // Log if block is ignored
-            _ <- logNotOfInterest(block).unlessA(isOfInterest)
-            // Save to store if block is of interest and send request for missing dependencies
-            _ <- markReceivedAndStore(dag).whenA(isOfInterest)
-          } yield ()
+          BlockDagStorage[F].getRepresentation.flatMap { dag =>
+            val p = for {
+              isOfInterest <- checkIfKnown(block, dag).not &&^ shouldCheck
+              _            <- if (isOfInterest) markReceivedAndStore(dag) else logNotOfInterest(block)
+            } yield ()
+
+            // This putToValidatedQueue is to accommodate concurrency issues when processing of a parent starts later
+            // then processing of a child and finishes earlier.
+            // In this case validation of a parent wont trigger child processing, but child will not be processed
+            // because it is missing parents
+
+            if (dag.contains(block.blockHash)) putToValidatedQueue(block) else p
+          }
         }
 
     // Process validated blocks

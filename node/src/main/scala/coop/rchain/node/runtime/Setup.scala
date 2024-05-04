@@ -189,7 +189,8 @@ object Setup {
           incomingBlockStream,
           validatedBlocksStream,
           conf.casper.shardName,
-          incomingBlocksQueue.trySend(_).void
+          incomingBlocksQueue.trySend(_).void,
+          validatedBlocksQueue.trySend(_).void
         )
       }
       // Blocks from receiver with fork-choice tips request on idle
