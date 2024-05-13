@@ -25,6 +25,8 @@ import scala.collection.immutable.SortedMap
 import scala.concurrent.duration._
 import cats.effect.{Deferred, Ref, Temporal}
 import coop.rchain.models.Validator.Validator
+import coop.rchain.models.syntax.modelsSyntaxByteString
+import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.sdk.dag.View
 
 object NodeSyncing {
@@ -116,23 +118,21 @@ class NodeSyncing[F[_]
     val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_ == sender))
 
     def handleApprovedBlock = {
-      val fringeStateHashStr = PrettyPrinter.buildString(msg.finalFringeMsg.stateHash)
-      val fringeLogMsg       = s"Received bootstrap data ${msg.show}."
+      val fringeLogMsg = s"Received bootstrap data ${msg.show}."
       for {
         _ <- Log[F].info(fringeLogMsg)
 
         // Download approved state and all related blocks
         _ <- requestApprovedState(
-              msg.finalFringeMsg,
               msg.tips.toSet,
               msg.lowerBound.map(x => x.validator -> x.seqNum).toMap
             )
 
         // Approved block is saved after the whole state is received,
         //  to restart requesting if interrupted with incomplete state.
-        _ <- ApprovedStore[F].putApprovedBlock(msg.finalFringeMsg)
+//        _ <- ApprovedStore[F].putApprovedBlock(msg.finalFringeMsg)
 
-        _ <- Log[F].info(s"LFS state ($fringeStateHashStr) is successfully restored.")
+        _ <- Log[F].info(s"LFS state for tips ${msg.tips} is successfully restored.")
       } yield ()
     }
 
@@ -152,8 +152,26 @@ class NodeSyncing[F[_]
     } yield ()
   }
 
+  def requestStates(states: List[Blake2b256Hash]): F[Unit] = {
+    // Request tuple space state for Last Finalized State
+    val stateValidator = RSpaceImporter.validateStateItems[F] _
+
+    val stream = LfsTupleSpaceRequester.stream(
+      states,
+      tupleSpaceQueue,
+      (statePartPath, pageSize) =>
+        TransportLayer[F].sendToBootstrap(
+          StoreItemsMessageRequest(statePartPath, 0, pageSize).toProto
+        ),
+      requestTimeout = 2.minutes,
+      RSpaceStateManager[F].importer,
+      stateValidator
+    )
+
+    Log[F].info(s"Loading ${states.size} states") *> stream.flatMap(_.compile.drain)
+  }
+
   def requestApprovedState(
-      fringe: FinalizedFringe,
       lms: Set[BlockHash],
       edge: Map[Validator, Long]
   ): F[Unit] =
@@ -172,30 +190,25 @@ class NodeSyncing[F[_]
                              Validate.blockHash[F]
                            )
 
-      // Request tuple space state for Last Finalized State
-      stateValidator = RSpaceImporter.validateStateItems[F] _
-      tupleSpaceStream <- LfsTupleSpaceRequester.stream(
-                           fringe,
-                           tupleSpaceQueue,
-                           (statePartPath, pageSize) =>
-                             TransportLayer[F].sendToBootstrap(
-                               StoreItemsMessageRequest(statePartPath, 0, pageSize).toProto
-                             ),
-                           requestTimeout = 2.minutes,
-                           RSpaceStateManager[F].importer,
-                           stateValidator
-                         )
-
-      tupleSpaceLogStream = tupleSpaceStream ++
-        fs2.Stream.eval(Log[F].info(s"Rholang state received and saved to store.")).drain
-
       // Receive the blocks and after populate the DAG
       blockRequestAddDagStream = blockRequestStream.last.unNoneTerminate.evalMap { st =>
-        populateDag(st.heightMap)
+        populateDag(st.heightMap) *>
+          Log[F].info(s"Blocks for LFS received and added to the state.") *>
+          fs2.Stream
+            .emits(st.heightMap.values.flatten.toList.distinct)
+            .evalMap(
+              BlockStore[F]
+                .getUnsafe(_)
+                .map(b => List(b.finStateHash, b.preStateHash, b.postStateHash))
+            )
+            .flatMap(fs2.Stream.emits)
+            .map(_.toBlake2b256Hash)
+            .compile
+            .to(Set)
+            .flatMap(x => requestStates(x.toList)) *>
+          Log[F].info(s"States for LFS received and imported.")
       }
-
-      // Run both streams in parallel until tuple space and all needed blocks are received
-      _ <- fs2.Stream(blockRequestAddDagStream, tupleSpaceLogStream).parJoinUnbounded.compile.drain
+      _ <- blockRequestAddDagStream.compile.drain
 
       // Mark finished initialization
       _ <- finished.complete(())

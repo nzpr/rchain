@@ -544,7 +544,6 @@ object ProposeSlot {
 }
 
 final case class BootstrapDataMessage(
-    finalFringeMsg: FinalizedFringe,
     tips: Seq[BlockHash],
     lowerBound: Set[ProposeSlot]
 ) extends CasperMessage {
@@ -554,20 +553,18 @@ final case class BootstrapDataMessage(
 object BootstrapDataMessage {
   def from(x: BootstrapDataProto): BootstrapDataMessage =
     BootstrapDataMessage(
-      FinalizedFringe.from(x.getFinalFringe),
       x.tips,
       x.lowerBound.map(ProposeSlot.from).toSet
     )
   def toProto(x: BootstrapDataMessage): BootstrapDataProto =
     BootstrapDataProto(
-      x.finalFringeMsg.toProto.some,
       x.tips,
       x.lowerBound.map(ProposeSlot.toProto).toSeq
     )
 
   implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
     override def show(t: BootstrapDataMessage): String =
-      s"tips: ${t.tips.map(_.toHexString.take(8))}, fringe: ${t.finalFringeMsg.show}, lowerBound: ${t.lowerBound
+      s"tips: ${t.tips.map(_.toHexString.take(8))}, lowerBound: ${t.lowerBound
         .map(x => x.validator.toHexString.take(8) -> x.seqNum)}"
   }
 }

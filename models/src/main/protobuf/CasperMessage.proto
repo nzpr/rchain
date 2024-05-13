@@ -25,9 +25,8 @@ option (scalapb.options) = {
 
 message BootstrapDataProto {
   option (scalapb.message).extends = "CasperMessageProto";
-  FinalizedFringeProto finalFringe = 1;
-  repeated bytes tips = 2;
-  repeated ProposeSlotProto lowerBound = 3;
+  repeated bytes tips = 1;
+  repeated ProposeSlotProto lowerBound = 2;
 }
 
 message ProposeSlotProto {
