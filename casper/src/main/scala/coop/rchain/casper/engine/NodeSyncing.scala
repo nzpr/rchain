@@ -200,11 +200,8 @@ class NodeSyncing[F[_]
         _ <- Log[F].info(
               s"Adding ${PrettyPrinter.buildString(block, short = true)}."
             )
-        pMetas <- block.justifications.traverse(BlockDagStorage[F].lookupUnsafe)
-        // TODO remove this seen compute and put it directly into block, so LFS can be started
-        seen = View.compute[Validator, BlockMetadata](pMetas.toSet, _.sender, _.seqNum, _.view)
-        bmd  = BlockMetadata.fromBlock(block).copy(view = seen)
-        _    <- BlockDagStorage[F].insert(bmd, block)
+        bmd = BlockMetadata.fromBlock(block)
+        _   <- BlockDagStorage[F].insert(bmd, block, isSync = true)
       } yield ()
 
     for {
