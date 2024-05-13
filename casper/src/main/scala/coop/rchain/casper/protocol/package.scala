@@ -23,6 +23,8 @@ package object protocol extends CasperMessageProtocol {
         // Last finalized state messages
         case StoreItemsMessageRequest => convert[StoreItemsMessageRequest.type](packet)
         case StoreItemsMessage        => convert[StoreItemsMessage.type](packet)
+        // Bootstrap data
+        case BootstrapData => convert[BootstrapData.type](packet)
       }
       .getOrElse(PacketParseResult.IllegalPacket(s"Unrecognized typeId: ${packet.typeId}"))
 

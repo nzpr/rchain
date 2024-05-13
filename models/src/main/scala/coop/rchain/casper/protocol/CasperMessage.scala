@@ -37,6 +37,8 @@ object CasperMessage {
     // Last finalized state messages
     case m: StoreItemsMessageRequestProto => Right(StoreItemsMessageRequest.from(m))
     case m: StoreItemsMessageProto        => Right(StoreItemsMessage.from(m))
+    case m: BootstrapDataProto            => Right(BootstrapDataMessage.from(m))
+    case m: ProposeSlotProto              => Right(ProposeSlot.from(m))
   }
 }
 
@@ -57,6 +59,14 @@ final case class FinalizedFringe(
 object FinalizedFringe {
   def from(f: FinalizedFringeProto): FinalizedFringe =
     FinalizedFringe(f.hashes, f.stateHash, f.stateHashes.toSet)
+
+  implicit def showFF: Show[FinalizedFringe] = new Show[FinalizedFringe] {
+    override def show(t: FinalizedFringe): String = {
+      val states = (List(t.stateHash) ++ t.stateHashes).map(_.toHexString.take(8))
+      val blocks = t.hashes.map(_.toHexString.take(8))
+      s"states: (${states} blocks: ${blocks}"
+    }
+  }
 }
 
 final case class FinalizedFringeRequest(identifier: String, trimState: Boolean = false)
@@ -522,6 +532,44 @@ object StoreItemsMessageRequest {
 
   def toProto(x: StoreItemsMessageRequest): StoreItemsMessageRequestProto =
     StoreItemsMessageRequestProto(x.startPath.map(StoreNodeKey.toProto).toList, x.skip, x.take)
+}
+
+final case class ProposeSlot(validator: ByteString, seqNum: Long) extends CasperMessage {
+  override def toProto: CasperMessageProto = ProposeSlot.toProto(this)
+}
+
+object ProposeSlot {
+  def from(x: ProposeSlotProto): ProposeSlot    = ProposeSlot(x.validator, x.seqNum)
+  def toProto(x: ProposeSlot): ProposeSlotProto = ProposeSlotProto(x.validator, x.seqNum)
+}
+
+final case class BootstrapDataMessage(
+    finalFringeMsg: FinalizedFringe,
+    tips: Seq[BlockHash],
+    lowerBound: Set[ProposeSlot]
+) extends CasperMessage {
+  override def toProto: BootstrapDataProto = BootstrapDataMessage.toProto(this)
+}
+
+object BootstrapDataMessage {
+  def from(x: BootstrapDataProto): BootstrapDataMessage =
+    BootstrapDataMessage(
+      FinalizedFringe.from(x.getFinalFringe),
+      x.tips,
+      x.lowerBound.map(ProposeSlot.from).toSet
+    )
+  def toProto(x: BootstrapDataMessage): BootstrapDataProto =
+    BootstrapDataProto(
+      x.finalFringeMsg.toProto.some,
+      x.tips,
+      x.lowerBound.map(ProposeSlot.toProto).toSeq
+    )
+
+  implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
+    override def show(t: BootstrapDataMessage): String =
+      s"tips: ${t.tips.map(_.toHexString.take(8))}, fringe: ${t.finalFringeMsg.show}, lowerBound: ${t.lowerBound
+        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}"
+  }
 }
 
 final case class StoreItemsMessage(

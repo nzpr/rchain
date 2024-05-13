@@ -24,6 +24,8 @@ object PacketTypeTag extends Enum[PacketTypeTag] {
   // Last finalized state messages
   case object StoreItemsMessageRequest extends PacketTypeTag
   case object StoreItemsMessage        extends PacketTypeTag
+  // Bootstrap data
+  case object BootstrapData extends PacketTypeTag
 
   override val values = findValues
 
@@ -54,6 +56,9 @@ object PacketTypeTag extends Enum[PacketTypeTag] {
       summon(StoreItemsMessageRequest)
     implicit val valueOfStoreItemsMessage: ValueOf[StoreItemsMessage.type] =
       summon(StoreItemsMessage)
+    // Bootstrap data messages
+    implicit val valueOfBootstrapData: ValueOf[BootstrapData.type] =
+      summon(BootstrapData)
   }
 
 }

@@ -157,6 +157,8 @@ object HashM extends HashMDerivation {
   implicit val Status                         = gen[Status]
 
   implicit val FinalizedFringeHash       = gen[FinalizedFringeProto]
+  implicit val proposeSlot               = gen[ProposeSlotProto]
+  implicit val bootstrapData             = gen[BootstrapDataProto]
   implicit val BlockMessageHash          = gen[BlockMessageProto]
   implicit val BlockMetadataInternalHash = gen[BlockMetadataProto]
   implicit val BodyHash                  = gen[RholangStateProto]

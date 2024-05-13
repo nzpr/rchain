@@ -23,6 +23,19 @@ option (scalapb.options) = {
 
 // ---------- Approved block ---------
 
+message BootstrapDataProto {
+  option (scalapb.message).extends = "CasperMessageProto";
+  FinalizedFringeProto finalFringe = 1;
+  repeated bytes tips = 2;
+  repeated ProposeSlotProto lowerBound = 3;
+}
+
+message ProposeSlotProto {
+  option (scalapb.message).extends = "CasperMessageProto";
+  bytes validator = 1;
+  int64 seqNum = 2;
+}
+
 message FinalizedFringeProto  {
   option (scalapb.message).extends = "CasperMessageProto";
   repeated bytes hashes = 1 [(scalapb.field).collection_type="List"];
