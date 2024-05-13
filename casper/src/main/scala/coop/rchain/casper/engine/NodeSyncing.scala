@@ -79,7 +79,7 @@ class NodeSyncing[F[_]
 ) {
   @SuppressWarnings(Array("org.wartremover.warts.NonUnitStatements"))
   def handle(peer: PeerNode, msg: CasperMessage): F[Unit] = msg match {
-    case ab: FinalizedFringe =>
+    case ab: BootstrapDataMessage =>
       onFinalizedFringeMessage(peer, ab)
 
     case s: StoreItemsMessage =>
@@ -109,23 +109,28 @@ class NodeSyncing[F[_]
   // TEMP: flag for single call for process approved block
   val startRequester = Ref.unsafe(true)
 
-  private def onFinalizedFringeMessage(sender: PeerNode, fringe: FinalizedFringe): F[Unit] = {
+  private def onFinalizedFringeMessage(
+      sender: PeerNode,
+      msg: BootstrapDataMessage
+  ): F[Unit] = {
     val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_ == sender))
 
     def handleApprovedBlock = {
-      val fringeHashesStr    = PrettyPrinter.buildString(fringe.hashes)
-      val fringeStateHashStr = PrettyPrinter.buildString(fringe.stateHash)
-      val fringeLogMsg =
-        s"Received finalized fringe from bootstrap node ($fringeStateHashStr) $fringeHashesStr."
+      val fringeStateHashStr = PrettyPrinter.buildString(msg.finalFringeMsg.stateHash)
+      val fringeLogMsg       = s"Received bootstrap data ${msg.show}."
       for {
         _ <- Log[F].info(fringeLogMsg)
 
         // Download approved state and all related blocks
-        _ <- requestApprovedState(fringe)
+        _ <- requestApprovedState(
+              msg.finalFringeMsg,
+              msg.tips.toSet,
+              msg.lowerBound.map(x => x.validator -> x.seqNum).toMap
+            )
 
         // Approved block is saved after the whole state is received,
         //  to restart requesting if interrupted with incomplete state.
-        _ <- ApprovedStore[F].putApprovedBlock(fringe)
+        _ <- ApprovedStore[F].putApprovedBlock(msg.finalFringeMsg)
 
         _ <- Log[F].info(s"LFS state ($fringeStateHashStr) is successfully restored.")
       } yield ()
@@ -147,11 +152,16 @@ class NodeSyncing[F[_]
     } yield ()
   }
 
-  def requestApprovedState(fringe: FinalizedFringe): F[Unit] =
+  def requestApprovedState(
+      fringe: FinalizedFringe,
+      lms: Set[BlockHash],
+      edge: Map[Validator, Long]
+  ): F[Unit] =
     for {
       // Request all blocks for Last Finalized State
       blockRequestStream <- LfsBlockRequester.stream(
-                             fringe,
+                             lms,
+                             edge,
                              incomingBlocksQueue.stream,
                              MultiParentCasper.deployLifespan,
                              hash => CommUtil[F].broadcastRequestForBlock(hash, 1.some),
@@ -181,7 +191,7 @@ class NodeSyncing[F[_]
 
       // Receive the blocks and after populate the DAG
       blockRequestAddDagStream = blockRequestStream.last.unNoneTerminate.evalMap { st =>
-        populateDag(st.lowerBound, st.heightMap)
+        populateDag(st.heightMap)
       }
 
       // Run both streams in parallel until tuple space and all needed blocks are received
@@ -192,7 +202,6 @@ class NodeSyncing[F[_]
     } yield ()
 
   private def populateDag(
-      minHeight: Long,
       heightMap: SortedMap[Long, Set[BlockHash]]
   ): F[Unit] = {
     def addBlockToDag(block: BlockMessage): F[Unit] =
@@ -216,17 +225,12 @@ class NodeSyncing[F[_]
               // TODO: blocks added to DAG without validation will have flag `processed=false` so invalid flag is not applicable
               // If sender has stake 0 in approved block, this means that sender has been slashed and block is invalid
               // Filter older not necessary blocks
-              blockHeight   = block.blockNumber
-              blockHeightOk = blockHeight >= minHeight
+              // blockHeight = block.blockNumber
+              // blockHeightOk = blockHeight >= minHeight
               // Add block to DAG
-              _ <- addBlockToDag(block).whenA(blockHeightOk)
+              _ <- addBlockToDag(block) //.whenA(blockHeightOk)
             } yield ()
           }
-
-      // Remove unnecessary blocks from block store (keep last 100)
-      toRemove = heightMap.dropRight(100).flatMap(_._2).toList
-      _        <- BlockStore[F].delete(toRemove)
-      _        <- Log[F].info(s"Removed ${toRemove.size} blocks older then 100 latest dag rows.")
 
       _ <- Log[F].info(s"Blocks for approved state added to DAG.")
     } yield ()
