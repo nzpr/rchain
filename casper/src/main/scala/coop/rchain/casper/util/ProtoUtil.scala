@@ -38,6 +38,7 @@ object ProtoUtil {
       blockNumber: Long,
       sender: PublicKey,
       seqNum: Long,
+      finStateHash: ByteString,
       preStateHash: ByteString,
       postStateHash: ByteString,
       justifications: List[BlockHash],
@@ -45,6 +46,7 @@ object ProtoUtil {
       rejectedDeploys: Set[ByteString],
       state: RholangState,
       view: View[Validator],
+      fringe: List[BlockHash]
   ): BlockMessage = {
     val block = BlockMessage(
       version,
@@ -53,6 +55,7 @@ object ProtoUtil {
       blockNumber = blockNumber,
       sender = sender.bytes.toByteString,
       seqNum = seqNum,
+      finStateHash = finStateHash,
       preStateHash = preStateHash,
       postStateHash = postStateHash,
       justifications,
@@ -67,6 +70,7 @@ object ProtoUtil {
       sigAlgorithm = Secp256k1.name,
       sig = ByteString.EMPTY,
       view,
+      fringe
     )
 
     val hash = hashBlock(block)

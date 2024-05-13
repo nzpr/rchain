@@ -108,6 +108,7 @@ object Genesis {
       genesis.blockNumber,
       genesis.sender,
       seqNum,
+      finStateHash = preStateHash,
       preStateHash = preStateHash,
       postStateHash = postStateHash,
       justifications = List.empty,
@@ -115,6 +116,7 @@ object Genesis {
       rejectedDeploys = Set.empty,
       state = state,
       view = View.semigroupDagSeen.empty,
+      fringe = List.empty
     )
   }
 

@@ -1,5 +1,6 @@
 package coop.rchain.casper.protocol
 
+import cats.Show
 import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.casper.PrettyPrinter
@@ -116,6 +117,7 @@ final case class BlockMessage(
     blockNumber: Long,
     sender: Validator,
     seqNum: Long,
+    finStateHash: ByteString,
     preStateHash: ByteString,
     postStateHash: ByteString,
     justifications: List[BlockHash],
@@ -130,6 +132,7 @@ final case class BlockMessage(
     sigAlgorithm: String,
     sig: ByteString,
     view: View[Validator],
+    fringe: List[BlockHash]
 ) extends CasperMessage {
   def toProto: BlockMessageProto = BlockMessage.toProto(this)
 
@@ -148,6 +151,7 @@ object BlockMessage {
       bm.blockNumber,
       bm.sender,
       bm.seqNum,
+      bm.finStateHash,
       bm.preStateHash,
       bm.postStateHash,
       bm.justifications,
@@ -159,6 +163,7 @@ object BlockMessage {
       bm.sigAlgorithm,
       bm.sig,
       View(bm.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
+      bm.fringe
     )
 
   def toProto(bm: BlockMessage): BlockMessageProto = {
@@ -194,6 +199,8 @@ object BlockMessage {
       .withView(
         bm.view.seen.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }.toList
       )
+      .withFringe(bm.fringe)
+      .withFinStateHash(bm.finStateHash)
   }
 
 }

@@ -14,7 +14,7 @@ import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeMana
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.casper.{PrettyPrinter, ValidatorIdentity}
 import coop.rchain.metrics.{Metrics, Span}
-import coop.rchain.models.BlockVersion
+import coop.rchain.models.{BlockMetadata, BlockVersion}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
@@ -102,6 +102,7 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
           blockData.blockNumber,
           creatorsPk,
           blockData.seqNum,
+          preState.fringeState.toByteString,
           preStateHash.toByteString,
           postStateHash,
           parents.toList,
@@ -109,6 +110,7 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
           finalization,
           state,
           view,
+          preState.fringe.toList.sorted
         )
 
         // Sign a block (hash should not be changed)
