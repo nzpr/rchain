@@ -69,25 +69,25 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         // Store fringe data
         fringeHash = FringeData.fringeHash(blockMetadata.fringe)
         // Calculate blocks included in the fringe
-        justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
-        prevFringeMsgs     = dagState.msgMap.latestFringe(justificationsMsgs)
-        fringeMsgs         = blockMetadata.fringe.map(dagState.msgMap)
-        fringeDiff = View
-          .diff(
-            Monoid[View[Validator]].combineAll(fringeMsgs.map(_.seen)),
-            Monoid[View[Validator]].combineAll(prevFringeMsgs.map(_.seen)),
-            IncludeTop
-          )
-          .seen
-          .map { case (v, r) => r.map(_.toLong).map(v -> _) }
-          .flatten
+//        justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
+//        prevFringeMsgs = dagState.msgMap.latestFringe(justificationsMsgs)
+//        fringeMsgs     = blockMetadata.fringe.map(dagState.msgMap)
+//        fringeDiff = View
+//          .diff(
+//            Monoid[View[Validator]].combineAll(fringeMsgs.map(_.seen)),
+//            Monoid[View[Validator]].combineAll(prevFringeMsgs.map(_.seen)),
+//            IncludeTop
+//          )
+//          .seen
+//          .map { case (v, r) => r.map(_.toLong).map(v -> _) }
+//          .flatten
 
-        fringeDiffHashes = fringeDiff.toList.flatMap(dag.hashLookup).toSet
+//        fringeDiffHashes = fringeDiff.toList.flatMap(dag.hashLookup).toSet
         // Fringe data object to store
         fringeData = FringeData(
           fringeHash,
           fringe = blockMetadata.fringe,
-          fringeDiff = fringeDiffHashes,
+          //fringeDiff = fringeDiffHashes,
           stateHash = blockMetadata.fringeStateHash.toBlake2b256Hash,
           rejectedDeploys = block.rejectedDeploys,
           rejectedBlocks = block.rejectedBlocks,
@@ -96,10 +96,10 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         // Save to fringe data store
         _ <- fringeDataStore.put(fringeHash, fringeData)
 
-        // Update block metadata members of finalized fringe
-        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
-        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
-        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
+//        // Update block metadata members of finalized fringe
+//        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
+//        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
+//        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
 
         // Take current DAG state / view of the DAG
         dagSet    <- blockMetadataIndex.dagSet
