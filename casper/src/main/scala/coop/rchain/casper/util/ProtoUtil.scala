@@ -13,6 +13,7 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models._
 import coop.rchain.models.syntax._
+import coop.rchain.sdk.dag.View
 
 object ProtoUtil {
 
@@ -42,7 +43,8 @@ object ProtoUtil {
       justifications: List[BlockHash],
       bonds: Map[Validator, Long],
       rejectedDeploys: Set[ByteString],
-      state: RholangState
+      state: RholangState,
+      view: View[Validator],
   ): BlockMessage = {
     val block = BlockMessage(
       version,
@@ -63,7 +65,8 @@ object ProtoUtil {
       //  so it should be set immediately.
       // [TG] I couldn't find a reason why is part of block hash.
       sigAlgorithm = Secp256k1.name,
-      sig = ByteString.EMPTY
+      sig = ByteString.EMPTY,
+      view,
     )
 
     val hash = hashBlock(block)

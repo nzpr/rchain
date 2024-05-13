@@ -122,8 +122,6 @@ object InterpreterUtil {
           } yield result.map(_.isDefined)
         }
       }
-      pMetas <- block.justifications.traverse(BlockDagStorage[F].lookupUnsafe)
-      seen   = View.compute[Validator, BlockMetadata](pMetas.toSet, _.sender, _.seqNum, _.view)
     } yield {
       val bmd = BlockMetadata
         .fromBlock(block)
@@ -131,8 +129,7 @@ object InterpreterUtil {
           validated = true,
           validationFailed = result.isLeft || !result.toOption.get,
           fringe = preState.fringe,
-          fringeStateHash = preState.fringeState.bytes.toArray.toByteString,
-          view = seen
+          fringeStateHash = preState.fringeState.bytes.toArray.toByteString
         )
       (bmd, result)
     }

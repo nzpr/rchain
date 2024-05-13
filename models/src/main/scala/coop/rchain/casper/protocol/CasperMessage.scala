@@ -12,6 +12,7 @@ import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.RSpaceExporter
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Serialize
 import scodec.bits.ByteVector
 
@@ -127,7 +128,8 @@ final case class BlockMessage(
     state: RholangState,
     // Block signature
     sigAlgorithm: String,
-    sig: ByteString
+    sig: ByteString,
+    view: View[Validator],
 ) extends CasperMessage {
   def toProto: BlockMessageProto = BlockMessage.toProto(this)
 
@@ -155,7 +157,8 @@ object BlockMessage {
       bm.rejectedSenders.toSet,
       state,
       bm.sigAlgorithm,
-      bm.sig
+      bm.sig,
+      View(bm.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
     )
 
   def toProto(bm: BlockMessage): BlockMessageProto = {
@@ -188,6 +191,9 @@ object BlockMessage {
       .withState(RholangState.toProto(bm.state))
       .withSigAlgorithm(bm.sigAlgorithm)
       .withSig(bm.sig)
+      .withView(
+        bm.view.seen.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }.toList
+      )
   }
 
 }

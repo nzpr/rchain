@@ -18,6 +18,7 @@ import coop.rchain.models.BlockVersion
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 
 final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
@@ -92,6 +93,9 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
       case Some((postStateHash, processedDeploys, processedSystemDeploys)) =>
         // Create block and calculate block hash
         val state = RholangState(processedDeploys.toList, processedSystemDeploys.toList)
+        val view = View
+          .compute[Validator, BlockMetadata](preState.justifications, _.sender, _.seqNum, _.view)
+
         val unsignedBlock = ProtoUtil.unsignedBlockProto(
           version = BlockVersion.Current,
           shardId,
@@ -103,7 +107,8 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
           parents.toList,
           bondsMap,
           finalization,
-          state
+          state,
+          view,
         )
 
         // Sign a block (hash should not be changed)

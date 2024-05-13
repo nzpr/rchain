@@ -15,8 +15,10 @@ import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.crypto.signatures.Secp256k1
 import coop.rchain.dag.DagOps
 import coop.rchain.metrics.{Metrics, Span}
+import coop.rchain.models.Validator.Validator
 import coop.rchain.models.{BlockMetadata, BlockVersion}
 import coop.rchain.models.syntax._
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared._
 
 import scala.util.{Success, Try}
@@ -325,6 +327,16 @@ object Validate {
       val prevParentsHeights = prevJs.map { case m => m.sender -> m.height }.toMap
       !parentsHeights.exists { case (v, h) => prevParentsHeights.get(v).exists(_ > h) }
     }
+
+  def view[F[_]: Sync: BlockDagStorage](
+      block: BlockMessage
+  ): F[ValidBlockProcessing] =
+    for {
+      jsMetas <- block.justifications.traverse(BlockDagStorage[F].lookupUnsafe)
+      view    = View.compute[Validator, BlockMetadata](jsMetas.toSet, _.sender, _.seqNum, _.view)
+      r = if (view == block.view) BlockStatus.valid.asRight[InvalidBlock]
+      else BlockStatus.invalidView.asLeft[ValidBlock]
+    } yield r
 
   /**
     * If block contains an invalid justification block B and the creator of B is still bonded,

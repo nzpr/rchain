@@ -15,6 +15,7 @@ object BlockStatus {
   def containsExpiredDeploy: InvalidBlock   = InvalidBlock.ContainsExpiredDeploy
   def containsFutureDeploy: InvalidBlock    = InvalidBlock.ContainsFutureDeploy
   def containsLowCostDeploy: InvalidBlock   = InvalidBlock.ContainsLowCostDeploy
+  def invalidView: InvalidBlock             = InvalidBlock.InvalidView
 }
 
 sealed trait ValidBlock extends BlockStatus
@@ -37,4 +38,5 @@ object InvalidBlock {
   case object ContainsExpiredDeploy   extends InvalidBlock
   case object ContainsFutureDeploy    extends InvalidBlock
   case object ContainsLowCostDeploy   extends InvalidBlock
+  case object InvalidView             extends InvalidBlock
 }

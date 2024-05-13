@@ -222,7 +222,8 @@ object MultiParentCasper {
     val validationProcess: EitherT[F, (BlockMetadata, InvalidBlock), BlockMetadata] =
       for {
         _ <- validateSummary
-        // compute view
+        // validate view
+        _                                <- EitherT.liftF(Validate.view(block))
         _                                <- EitherT.liftF(Span[F].mark("post-validation-block-summary"))
         validated                        <- EitherT.liftF(InterpreterUtil.validateBlockCheckpoint(block))
         (blockMetadata, validatedResult) = validated

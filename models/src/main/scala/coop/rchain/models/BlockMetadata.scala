@@ -83,6 +83,6 @@ object BlockMetadata {
       fringe = Set(),
       fringeStateHash = RadixHistory.emptyRootHash.toByteString,
       memberOfFringe = none,
-      view = View.semigroupDagSeen.empty
+      view = b.view
     )
 }

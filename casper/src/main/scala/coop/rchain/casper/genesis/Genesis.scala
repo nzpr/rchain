@@ -13,6 +13,7 @@ import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.models.BlockVersion
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
+import coop.rchain.sdk.dag.View
 
 final case class Genesis(
     sender: PublicKey,
@@ -112,7 +113,8 @@ object Genesis {
       justifications = List.empty,
       bonds = buildBondsMap(genesis.proofOfStake),
       rejectedDeploys = Set.empty,
-      state = state
+      state = state,
+      view = View.semigroupDagSeen.empty,
     )
   }
 
