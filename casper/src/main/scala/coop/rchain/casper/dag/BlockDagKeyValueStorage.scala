@@ -122,18 +122,32 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         heightMap <- blockMetadataIndex.heightMap
         dag <- representationState.updateAndGet { dr =>
                 // Update DAG messages state
-                val dagMsgSt       = dr.dagMessageState
-                val msg            = messageFromBlockMetadata(blockMetadata)
-                val newDagMsgState = dagMsgSt.insertMsg(msg)
+                val dagMsgSt = dr.dagMessageState
+                val msg      = messageFromBlockMetadata(blockMetadata)
+                val newDagMsgState = {
+                  val neu = dagMsgSt.insertMsg(msg)
+                  neu.copy(msgMap = neu.msgMap -- garbage)
+                }
 
-                val newHashLookup = dr.hashLookup.updated(
-                  (msg.sender, msg.senderSeq),
-                  dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
-                )
+                val newHashLookup = {
+                  val neu = dr.hashLookup.updated(
+                    (msg.sender, msg.senderSeq),
+                    dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
+                  )
+                  // TODO handle equivocations
+                  val gc = garbage
+                    .map(dr.dagMessageState.msgMap)
+                    .map(x => x.sender -> x.senderSeq)
+                  neu -- gc
+                }
 
                 // Update fringe data cache
                 // TODO: remove out of reach records (not needed for further finalization)
-                val newFringes = dr.fringeStates + ((msg.fringe, fringeData))
+                val newFringes = {
+                  val neu = dr.fringeStates + ((msg.fringe, fringeData))
+                  val gc  = garbage.map(dr.dagMessageState.msgMap(_).fringe)
+                  neu -- gc
+                }
 
                 // Updated DagRepresentation
                 dr.copy(
