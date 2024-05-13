@@ -15,6 +15,7 @@ import scala.collection.immutable.SortedMap
 import scala.concurrent.duration._
 import cats.effect.{Ref, Temporal}
 import coop.rchain.models.Validator.Validator
+import coop.rchain.models.block.StateHash.StateHash
 
 /**
   * Last Finalized State processor for receiving blocks.
@@ -143,7 +144,7 @@ object LfsBlockRequester {
     * @return fs2.Stream processing all blocks
     */
   def stream[F[_]: Async: Log](
-      initialHashes: Set[BlockHash], // block hashes from LFS sync will be started
+      initialHashes: Set[StateHash], // block hashes from LFS sync will be started
       edge: Map[Validator, Long],
       incomingBlocks: Stream[F, BlockMessage],
       blockHeightsBeforeFringe: Int,

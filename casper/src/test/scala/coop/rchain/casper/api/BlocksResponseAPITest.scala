@@ -185,7 +185,6 @@ class BlocksResponseAPITest
           Set(genesisHash) -> FringeData(
             FringeData.fringeHash(Set.empty),
             Set.empty,
-            Set.empty,
             genesisHash.toBlake2b256Hash,
             Set.empty,
             Set.empty,

@@ -19,6 +19,7 @@ import scodec.bits.ByteVector
 import java.nio.ByteBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import cats.effect.unsafe.implicits.global
+import coop.rchain.models.syntax.modelsSyntaxByteString
 
 class LfsStateRequesterEffectsSpec extends AnyFlatSpec with Matchers with Fs2StreamMatchers {
 
@@ -132,7 +133,9 @@ class LfsStateRequesterEffectsSpec extends AnyFlatSpec with Matchers with Fs2Str
 
       // Queue for processing the internal state (ST)
       processingStream <- LfsTupleSpaceRequester.stream[F](
-                           finalizedFringe,
+                           (finalizedFringe.stateHashes + finalizedFringe.stateHash)
+                             .map(_.toBlake2b256Hash)
+                             .toList,
                            responseQueue,
                            (s, n) => requestQueue.trySend((s, n)).void,
                            requestTimeout,
