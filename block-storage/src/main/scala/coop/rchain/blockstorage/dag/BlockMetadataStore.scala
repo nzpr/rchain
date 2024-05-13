@@ -12,6 +12,7 @@ import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueTypedStore
 
+import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 
 object BlockMetadataStore {
@@ -29,8 +30,14 @@ object BlockMetadataStore {
       _ <- new FatalError(
             s"Missing block metadata required: ${(lfsSet -- blockInfoMap.keySet).map(_.toHexString.take(8))}"
           ).raiseError.whenA(blockInfoMap.size != lfsSet.size)
-      _           <- Log[F].info("Loading blocks metadata done.")
-      dagState    = recreateInMemoryState(blockInfoMap)
+      _ <- Log[F].info("Loading blocks metadata done.")
+      // garbage can be in the lfsSetStore if node shut down after block is added but before GC-ed blocks
+      // are removed from lfsSetStore
+      (dagState, garbage) = recreateInMemoryState(blockInfoMap)
+      _                   <- lfsSetStore.delete(garbage.toSeq)
+      _ <- Log[F]
+            .info(s"Lfs set store contains ${garbage.size} garbage records. Cleaning up.")
+            .whenA(garbage.nonEmpty)
       _           <- Log[F].info("Successfully built in-memory blockMetadataStore.")
       dagStateRef <- Ref[F].of(dagState)
     } yield new BlockMetadataStore[F](blockMetadataStore, lfsSetStore, dagStateRef)
@@ -62,7 +69,7 @@ object BlockMetadataStore {
         _ <- dagState.update { st =>
               val blockInfo   = blockMetadataToInfo(block)
               val newDagState = addBlockToDagState(blockInfo)(st)
-              validateDagState(newDagState)
+              validateDagState(newDagState)._1
             }
 
         // Update persistent block metadata store
@@ -124,12 +131,32 @@ object BlockMetadataStore {
     )
   }
 
-  private def validateDagState(state: DagState): DagState = {
+  @tailrec
+  private def validateDagState(
+      state: DagState,
+      invalidAcc: Set[BlockHash] = Set()
+  ): (DagState, Set[BlockHash]) = {
     // Validate height map index (block numbers) are in sequence without holes
-    val m          = state.heightMap
+    // genesis should always stay in the DB, and it should not be included in this check
+    val m          = state.heightMap.filterNot(_._1 == 0)
     val (min, max) = if (m.nonEmpty) (m.firstKey, m.lastKey + 1) else (0L, 0L)
-    assert(max - min == m.size.toLong, "DAG store height map has numbers not in sequence.")
-    state
+    if (max - min == m.size.toLong) (state, invalidAcc)
+    else {
+      val (height, toRemove) = state.heightMap.head
+      validateDagState(
+        state.copy(
+          dagSet = state.dagSet -- toRemove,
+          heightMap = state.heightMap - height,
+          childMap = state.childMap -- toRemove
+        ),
+        invalidAcc ++ toRemove
+      )
+    }
+//    assert(
+//      max - min == m.size.toLong,
+//      s"DAG store height map has numbers not in sequence. \nheightMap size ${m.size.toLong}: $m \nmax $max \nmin $min "
+//    )
+
   }
 
   // Used to project part of the block metadata for in-memory initialization
@@ -142,7 +169,7 @@ object BlockMetadataStore {
 
   private def recreateInMemoryState(
       blocksInfoMap: Map[BlockHash, BlockInfo]
-  ): DagState = {
+  ): (DagState, Set[BlockHash]) = {
     val emptyState: DagState =
       DagState(
         dagSet = Set(),
