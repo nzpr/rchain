@@ -68,7 +68,9 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
     */
   def lowestFringe(msgs: Set[Message[M, S]]): Set[Message[M, S]] =
     msgs.toList
-      .minimumByOption(_.fringe.map(msgMap).toList.map(_.height).minimumOption.getOrElse(-1L))
+      .minimumByOption(
+        _.fringe.map(msgMap.getUnsafe).toList.map(_.height).minimumOption.getOrElse(-1L)
+      )
       .map(_.fringe)
       .getOrElse(Set())
       .map(msgMap)

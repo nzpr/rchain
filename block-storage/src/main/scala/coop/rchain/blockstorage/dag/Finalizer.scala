@@ -4,6 +4,7 @@ import cats.syntax.all._
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.sdk.consensus.Stake
 import coop.rchain.sdk.dag.View
+import coop.rchain.sdk.syntax.all.mapSyntax
 
 import scala.collection.compat.immutable.LazyList
 
@@ -56,7 +57,10 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
   // Iterate self parent messages
   def selfParents(mv: Message[M, S], finalized: Set[Message[M, S]]): Seq[Message[M, S]] =
     unfold(mv) { m =>
-      m.parents.map(msgMap).filter(x => x.sender == mv.sender && !finalized(x)).iterator
+      m.parents
+        .map(msgMap.getUnsafe)
+        .filter(x => x.sender == mv.sender && !finalized(x))
+        .iterator
     }
 
   /**
