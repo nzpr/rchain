@@ -2,7 +2,6 @@ package coop.rchain.casper.dag
 
 import cats.effect.std.Semaphore
 import cats.effect.{Async, Ref, Sync}
-import cats.kernel.Monoid
 import cats.syntax.all._
 import cats.{Applicative, Monad, Show}
 import coop.rchain.blockstorage._
@@ -24,8 +23,7 @@ import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockMetadata, FringeData}
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.hashing.Blake2b256Hash.codecBlake2b256Hash
-import coop.rchain.sdk.dag.View
-import coop.rchain.sdk.dag.View.{IncludeBottom, IncludeTop}
+import coop.rchain.sdk.dag.View.IncludeBottom
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
@@ -159,6 +157,9 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                   hashLookup = newHashLookup
                 )
               }
+
+        // GC in mem state for block metadata index
+        _ <- blockMetadataIndex.gc(garbage.toList)
 
         _ <- removeExpiredFromPool(deployStore, dag).map(
               _.map((_, ())).foreach((expiredMap.update _).tupled)

@@ -132,7 +132,9 @@ class NodeSyncing[F[_]
         //  to restart requesting if interrupted with incomplete state.
 //        _ <- ApprovedStore[F].putApprovedBlock(msg.finalFringeMsg)
 
-        _ <- Log[F].info(s"LFS state for tips ${msg.tips} is successfully restored.")
+        _ <- Log[F].info(
+              s"LFS state for tips ${msg.tips.map(_.toHexString.take(8))} is successfully restored."
+            )
       } yield ()
     }
 

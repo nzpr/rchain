@@ -63,6 +63,21 @@ object BlockMetadataStore {
       val lfsSetStore: KeyValueTypedStore[F, BlockHash, Unit], // store for latest messages
       private val dagState: Ref[F, DagState]
   ) {
+    def gc(toRemove: List[BlockHash])(implicit f: Sync[F]): F[Unit] =
+      store.get(toRemove).flatMap { rMeta =>
+        dagState.update { st =>
+          DagState(
+            dagSet = st.dagSet -- toRemove,
+            childMap = st.childMap -- toRemove,
+            heightMap = rMeta.foldLeft(st.heightMap) {
+              case (acc, Some(m)) =>
+                acc.updated(m.blockNum, acc.get(m.blockNum).map(_ - m.blockHash).getOrElse(Set()))
+              case (acc, None) => acc
+            }
+          )
+        }
+      }
+
     def add(block: BlockMetadata): F[Unit] =
       for {
         // Update DAG state with new block
