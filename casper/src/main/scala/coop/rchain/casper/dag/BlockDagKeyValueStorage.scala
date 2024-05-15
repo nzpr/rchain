@@ -6,7 +6,6 @@ import cats.syntax.all._
 import cats.{Applicative, Monad, Show}
 import coop.rchain.blockstorage._
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
-import coop.rchain.blockstorage.dag.BlockMetadataStore.BlockMetadataStore
 import coop.rchain.blockstorage.dag._
 import coop.rchain.blockstorage.dag.codecs._
 import coop.rchain.blockstorage.syntax._
@@ -24,17 +23,21 @@ import coop.rchain.models.{BlockMetadata, FringeData}
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.hashing.Blake2b256Hash.codecBlake2b256Hash
 import coop.rchain.sdk.dag.View.IncludeBottom
+import coop.rchain.sdk.error.FatalError
 import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import coop.rchain.store.{KeyValueStoreManager, KeyValueTypedStore}
 import fs2.Stream
 
+import scala.annotation.tailrec
 import scala.collection.concurrent.TrieMap
+import scala.collection.immutable.SortedMap
 
 final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
     representationState: Ref[F, DagRepresentation],
     lock: Semaphore[F],
-    blockMetadataIndex: BlockMetadataStore[F],
+    metadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata],
+    lfsSetStore: KeyValueTypedStore[F, BlockHash, Unit], // store for latest messages
     fringeDataStore: KeyValueTypedStore[F, Blake2b256Hash, FringeData],
     deployIndex: KeyValueTypedStore[F, DeployId, BlockHash],
     deployStore: KeyValueTypedStore[F, DeployId, Signed[DeployData]]
@@ -49,13 +52,56 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
   ): F[Unit] = {
     def doInsert: F[Unit] =
       for {
+        // Update persistent storages
+        // Add metadata
+        _ <- metadataStore.put(block.blockHash, blockMetadata)
+
+        // Add to LFS set. It will be removed when GC event happens.
+        _ <- lfsSetStore.put(block.blockHash, ())
+
+        // Add deploys to deploy index storage
+        _ <- deployIndex.put(block.state.deploys.map(_.deploy.sig).map(_ -> block.blockHash))
+
+        // Add fringe data
+        fringeHash = FringeData.fringeHash(blockMetadata.fringe)
+        // Calculate blocks included in the fringe
+        //        justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
+        //        prevFringeMsgs = dagState.msgMap.latestFringe(justificationsMsgs)
+        //        fringeMsgs     = blockMetadata.fringe.map(dagState.msgMap)
+        //        fringeDiff = View
+        //          .diff(
+        //            Monoid[View[Validator]].combineAll(fringeMsgs.map(_.seen)),
+        //            Monoid[View[Validator]].combineAll(prevFringeMsgs.map(_.seen)),
+        //            IncludeTop
+        //          )
+        //          .seen
+        //          .map { case (v, r) => r.map(_.toLong).map(v -> _) }
+        //          .flatten
+
+        //        fringeDiffHashes = fringeDiff.toList.flatMap(dag.hashLookup).toSet
+        // Fringe data object to store
+
+        //        // Update block metadata members of finalized fringe
+        //        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
+        //        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
+        //        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
+        fringeData = FringeData(
+          fringeHash,
+          fringe = blockMetadata.fringe,
+          //fringeDiff = fringeDiffHashes,
+          stateHash = blockMetadata.fringeStateHash.toBlake2b256Hash,
+          rejectedDeploys = block.rejectedDeploys,
+          rejectedBlocks = block.rejectedBlocks,
+          rejectedSenders = block.rejectedSenders
+        )
+        // Save to fringe data store
+        _ <- fringeDataStore.put(fringeHash, fringeData)
+
+        // Update in-mem indices
         dag      <- representationState.get
         dagState = dag.dagMessageState
 
-        // Add deploys to deploy index storage
-        deployHashes = block.state.deploys.map(_.deploy.sig)
-        _            <- deployIndex.put(deployHashes.map(_ -> block.blockHash))
-
+        // Blocks that no more required to process any future message
         garbage <- if (!isSync) {
                     // attempt to prune only when sender is the only outsider
                     // (this means all justifications already advanced the fringe compared to self justification)
@@ -76,48 +122,6 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                   } else
                     Set.empty[BlockHash].pure
 
-        // Add block metadata
-        _ <- blockMetadataIndex.add(blockMetadata)
-
-        // Store fringe data
-        fringeHash = FringeData.fringeHash(blockMetadata.fringe)
-        // Calculate blocks included in the fringe
-//        justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
-//        prevFringeMsgs = dagState.msgMap.latestFringe(justificationsMsgs)
-//        fringeMsgs     = blockMetadata.fringe.map(dagState.msgMap)
-//        fringeDiff = View
-//          .diff(
-//            Monoid[View[Validator]].combineAll(fringeMsgs.map(_.seen)),
-//            Monoid[View[Validator]].combineAll(prevFringeMsgs.map(_.seen)),
-//            IncludeTop
-//          )
-//          .seen
-//          .map { case (v, r) => r.map(_.toLong).map(v -> _) }
-//          .flatten
-
-//        fringeDiffHashes = fringeDiff.toList.flatMap(dag.hashLookup).toSet
-        // Fringe data object to store
-        fringeData = FringeData(
-          fringeHash,
-          fringe = blockMetadata.fringe,
-          //fringeDiff = fringeDiffHashes,
-          stateHash = blockMetadata.fringeStateHash.toBlake2b256Hash,
-          rejectedDeploys = block.rejectedDeploys,
-          rejectedBlocks = block.rejectedBlocks,
-          rejectedSenders = block.rejectedSenders
-        )
-        // Save to fringe data store
-        _ <- fringeDataStore.put(fringeHash, fringeData)
-
-//        // Update block metadata members of finalized fringe
-//        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
-//        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
-//        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
-
-        // Take current DAG state / view of the DAG
-        dagSet    <- blockMetadataIndex.dagSet
-        childMap  <- blockMetadataIndex.childMapData
-        heightMap <- blockMetadataIndex.heightMap
         dag <- representationState.updateAndGet { dr =>
                 // Update DAG messages state
                 val dagMsgSt = dr.dagMessageState
@@ -147,19 +151,44 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                   neu -- gc
                 }
 
+                val newDagSet = {
+                  val neu = dr.dagSet + msg.id
+                  neu -- garbage
+
+                }
+
+                val newChildMap = {
+                  val neu = msg.parents.foldLeft(dr.childMap) {
+                    case (acc, p) =>
+                      acc.updated(p, acc.get(p).map(_ + msg.id).getOrElse(Set(msg.id)))
+                  }
+                  neu -- garbage
+                }
+
+                val newHeightMap = {
+                  val neu = dr.heightMap.updated(
+                    msg.height,
+                    dr.heightMap.get(msg.height).map(_ + msg.id).getOrElse(Set(msg.id))
+                  )
+                  garbage.map(dagMsgSt.msgMap.getUnsafe(_)).foldLeft(neu) {
+                    case (acc, m) =>
+                      acc.updated(
+                        m.height,
+                        acc.get(m.height).map(_ - m.id).getOrElse(Set())
+                      )
+                  }
+                }
+
                 // Updated DagRepresentation
                 dr.copy(
-                  dagSet,
-                  childMap,
-                  heightMap,
+                  newDagSet,
+                  newChildMap,
+                  newHeightMap,
                   newDagMsgState,
                   fringeStates = newFringes,
                   hashLookup = newHashLookup
                 )
               }
-
-        // GC in mem state for block metadata index
-        _ <- blockMetadataIndex.gc(garbage.toList)
 
         _ <- removeExpiredFromPool(deployStore, dag).map(
               _.map((_, ())).foreach((expiredMap.update _).tupled)
@@ -167,7 +196,7 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
       } yield ()
 
     lock.permit.use { _ =>
-      blockMetadataIndex
+      metadataStore
         .contains(blockMetadata.blockHash)
         .ifM(
           Log[F]
@@ -199,14 +228,14 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
       curLPF.map(_.id)
 
     Sync[F].delay(toPrune.toList.foreach(BlockIndex.cache.remove)) *>
-      blockMetadataIndex.lfsSetStore.delete(toPrune.toList) *>
+      lfsSetStore.delete(toPrune.toList) *>
       Log[F]
         .info(s"Pruned ${toPrune.size} blocks, new index size: ${BlockIndex.cache.size}")
         .as(toPrune)
   }
 
   override def lookup(blockHash: BlockHash): F[Option[BlockMetadata]] =
-    blockMetadataIndex.get(blockHash)
+    metadataStore.get1(blockHash)
 
   override def lookupByDeployId(deployId: DeployId): F[Option[BlockHash]] =
     deployIndex.get1(deployId)
@@ -245,7 +274,7 @@ object BlockDagKeyValueStorage {
   }
 
   private final case class DagStores[F[_]](
-      metadata: BlockMetadataStore[F],
+      metadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata],
       lfsSet: KeyValueTypedStore[F, BlockHash, Unit], // set of blocks metadata required to start the node
       fringeDataDb: KeyValueTypedStore[F, Blake2b256Hash, FringeData],
       deploys: KeyValueTypedStore[F, DeployId, BlockHash],
@@ -270,8 +299,6 @@ object BlockDagKeyValueStorage {
                 scodec.Codec[Unit]
               )
 
-      blockMetadataStore <- BlockMetadataStore[F](blockMetadataDb, lfsDb)
-
       // Fringe data map
       fringeDataDb <- KeyValueStoreManager[F].database[Blake2b256Hash, FringeData](
                        "fringe-data",
@@ -293,7 +320,7 @@ object BlockDagKeyValueStorage {
                        codecSignedDeployData
                      )
     } yield DagStores(
-      blockMetadataStore,
+      blockMetadataDb,
       lfsDb,
       fringeDataDb,
       deployIndexDb,
@@ -308,13 +335,8 @@ object BlockDagKeyValueStorage {
       lock   <- MetricsSemaphore.single[F]
       stores <- createStores(kvm)
       initST <- {
-        val metadata = stores.metadata
         for {
-          // Take current DAG state / view of the DAG
-          dagSet    <- metadata.dagSet
-          childMap  <- metadata.childMapData
-          heightMap <- metadata.heightMap
-          lfsSet    <- metadata.lfsSetStore.toMap.map(_.keySet)
+          lfsSet <- stores.lfsSet.toMap.map(_.keySet)
 
           // Fill message map from BlockMetadata
           dmsSt <- Ref.of(DagMessageState[BlockHash, Validator]())
@@ -328,7 +350,7 @@ object BlockDagKeyValueStorage {
               hl     <- hlSt.get
               msgMap = ds.msgMap
               updateMessage = for {
-                block <- metadata.getUnsafe(hash)
+                block <- stores.metadataStore.getUnsafe(hash)
                 msg   = messageFromBlockMetadata(block)
                 newDs = ds.insertMsg(msg)
 
@@ -361,6 +383,12 @@ object BlockDagKeyValueStorage {
           dagMsgsState <- dmsSt.get
           fringeStates <- fsSt.get
           hashLookup   <- hlSt.get
+
+          // TODO do this inside initMsgMapJob
+          indices   <- create3Indices(stores.metadataStore, stores.lfsSet)
+          dagSet    = indices.dagSet
+          childMap  = indices.childMap
+          heightMap = indices.heightMap
         } yield DagRepresentation(
           dagSet,
           childMap,
@@ -374,11 +402,133 @@ object BlockDagKeyValueStorage {
     } yield new BlockDagKeyValueStorage[F](
       stRef,
       lock,
-      stores.metadata,
+      stores.metadataStore,
+      stores.lfsSet,
       stores.fringeDataDb,
       stores.deploys,
       stores.deployPool
     )
+
+  // TODO create these indices inside `create`
+  private final case class DagState(
+      dagSet: Set[BlockHash],
+      childMap: Map[BlockHash, Set[BlockHash]],
+      heightMap: SortedMap[Long, Set[BlockHash]]
+  )
+
+  private def create3Indices[F[_]: Sync: Log](
+      blockMetadataStore: KeyValueTypedStore[F, BlockHash, BlockMetadata],
+      lfsSetStore: KeyValueTypedStore[F, BlockHash, Unit]
+  ): F[DagState] = {
+    // Used to project part of the block metadata for in-memory initialization
+    final case class BlockInfo(
+        hash: BlockHash,
+        parents: Set[BlockHash],
+        blockNum: Long,
+        validationFailed: Boolean
+    )
+
+    def blockMetadataToInfo(blockMeta: BlockMetadata): BlockInfo =
+      BlockInfo(
+        blockMeta.blockHash,
+        blockMeta.justifications,
+        blockMeta.blockNum,
+        blockMeta.validationFailed
+      )
+
+    @tailrec
+    def validateDagState(
+        state: DagState,
+        invalidAcc: Set[BlockHash] = Set()
+    ): (DagState, Set[BlockHash]) = {
+      // Validate height map index (block numbers) are in sequence without holes
+      // genesis should always stay in the DB, and it should not be included in this check
+      val m          = state.heightMap.filterNot(_._1 == 0)
+      val (min, max) = if (m.nonEmpty) (m.firstKey, m.lastKey + 1) else (0L, 0L)
+      if (max - min == m.size.toLong) (state, invalidAcc)
+      else {
+        val (height, toRemove) = state.heightMap.head
+        validateDagState(
+          state.copy(
+            dagSet = state.dagSet -- toRemove,
+            heightMap = state.heightMap - height,
+            childMap = state.childMap -- toRemove
+          ),
+          invalidAcc ++ toRemove
+        )
+      }
+      //    assert(
+      //      max - min == m.size.toLong,
+      //      s"DAG store height map has numbers not in sequence. heightMap size ${m.size.toLong}: $m \nmax $max \nmin $min "
+      //    )
+    }
+
+    def recreateInMemoryState(
+        blocksInfoMap: Map[BlockHash, BlockInfo]
+    ): (DagState, Set[BlockHash]) = {
+
+      val emptyState: DagState =
+        DagState(
+          dagSet = Set(),
+          childMap = Map(),
+          heightMap = SortedMap()
+        )
+
+      // Add blocks to DAG state
+      val dagState = blocksInfoMap.foldLeft(emptyState) {
+        case (state, (_, block)) => addBlockToDagState(block)(state)
+      }
+
+      validateDagState(dagState)
+    }
+
+    def addBlockToDagState(block: BlockInfo)(state: DagState): DagState = {
+      // Update dag set / all blocks in the DAG
+      val newDagSet = state.dagSet + block.hash
+
+      // Update children relation map
+      val blockChilds = block.parents.map((_, Set(block.hash))) + ((block.hash, Set()))
+      val newChildMap = blockChilds.foldLeft(state.childMap) {
+        case (acc, (key, newChildren)) =>
+          val currChildren = acc.getOrElse(key, Set.empty[BlockHash])
+          acc.updated(key, currChildren ++ newChildren)
+      }
+
+      // Update block height map
+      val newHeightMap = if (!block.validationFailed) {
+        val currSet = state.heightMap.getOrElse(block.blockNum, Set())
+        state.heightMap.updated(block.blockNum, currSet + block.hash)
+      } else state.heightMap
+
+      state.copy(
+        dagSet = newDagSet,
+        childMap = newChildMap,
+        heightMap = newHeightMap
+      )
+    }
+
+    for {
+      lfsSet <- lfsSetStore.toMap.map(_.keySet)
+      _      <- Log[F].info(s"Loading blocks metadata (${lfsSet.size} blocks).")
+      // Iterate over block metadata store and collect info for in-memory cache
+      blockInfoMap <- blockMetadataStore
+                       .get(lfsSet.toList)
+                       .map(_.flatten.map(x => x.blockHash -> blockMetadataToInfo(x)).toMap)
+      _ <- new FatalError(
+            s"Missing block metadata required: ${(lfsSet -- blockInfoMap.keySet)
+              .map(_.toHexString.take(8))}"
+          ).raiseError.whenA(blockInfoMap.size != lfsSet.size)
+      _ <- Log[F].info("Loading blocks metadata done.")
+      // garbage can be in the lfsSetStore if node shut down after block is added but before GC-ed blocks
+      // are removed from lfsSetStore
+      (dagState, garbage) = recreateInMemoryState(blockInfoMap)
+      _                   <- lfsSetStore.delete(garbage.toSeq)
+      _ <- Log[F]
+            .info(s"Lfs set store contains ${garbage.size} garbage records. Cleaning up.")
+            .whenA(garbage.nonEmpty)
+      _ <- Log[F].info("Successfully built in-memory blockMetadataStore.")
+    } yield dagState
+  }
 
   private def messageFromBlockMetadata(
       block: BlockMetadata
@@ -393,7 +543,7 @@ object BlockDagKeyValueStorage {
     seen = block.view
   )
 
-  def removeExpiredFromPool[F[_]: Monad](
+  private def removeExpiredFromPool[F[_]: Monad](
       deployStore: KeyValueTypedStore[F, DeployId, Signed[DeployData]],
       dag: DagRepresentation
   ): F[List[DeployId]] = {
