@@ -14,7 +14,8 @@ object VaultParser {
     * Parser for wallets file used in genesis ceremony to set initial REV accounts.
     */
   def parse[F[_]: Async: Log](vaultsPath: Path): F[Seq[Vault]] =
-    Files[F]
+    Files
+      .forAsync[F]
       .readAll(vaultsPath)
       .through(text.utf8.decode)
       .through(text.lines)
@@ -59,7 +60,8 @@ object VaultParser {
   def parse[F[_]: Async: Log](vaultsPathStr: String): F[Seq[Vault]] = {
     val vaultsPath = Path(vaultsPathStr)
 
-    Files[F]
+    Files
+      .forAsync[F]
       .exists(vaultsPath)
       .ifM(
         Log[F].info(s"Parsing wallets file $vaultsPath.") >> parse(vaultsPath),

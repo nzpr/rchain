@@ -154,7 +154,6 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                 val newDagSet = {
                   val neu = dr.dagSet + msg.id
                   neu -- garbage
-
                 }
 
                 val newChildMap = {
