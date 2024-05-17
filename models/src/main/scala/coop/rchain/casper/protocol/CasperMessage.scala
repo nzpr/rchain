@@ -1,5 +1,6 @@
 package coop.rchain.casper.protocol
 
+import cats.Show
 import cats.syntax.all._
 import com.google.protobuf.ByteString
 import coop.rchain.casper.PrettyPrinter
@@ -12,6 +13,7 @@ import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.RSpaceExporter
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Serialize
 import scodec.bits.ByteVector
 
@@ -35,6 +37,8 @@ object CasperMessage {
     // Last finalized state messages
     case m: StoreItemsMessageRequestProto => Right(StoreItemsMessageRequest.from(m))
     case m: StoreItemsMessageProto        => Right(StoreItemsMessage.from(m))
+    case m: BootstrapDataProto            => Right(BootstrapDataMessage.from(m))
+    case m: ProposeSlotProto              => Right(ProposeSlot.from(m))
   }
 }
 
@@ -55,6 +59,14 @@ final case class FinalizedFringe(
 object FinalizedFringe {
   def from(f: FinalizedFringeProto): FinalizedFringe =
     FinalizedFringe(f.hashes, f.stateHash, f.stateHashes.toSet)
+
+  implicit def showFF: Show[FinalizedFringe] = new Show[FinalizedFringe] {
+    override def show(t: FinalizedFringe): String = {
+      val states = (List(t.stateHash) ++ t.stateHashes).map(_.toHexString.take(8))
+      val blocks = t.hashes.map(_.toHexString.take(8))
+      s"states: (${states} blocks: ${blocks}"
+    }
+  }
 }
 
 final case class FinalizedFringeRequest(identifier: String, trimState: Boolean = false)
@@ -115,6 +127,7 @@ final case class BlockMessage(
     blockNumber: Long,
     sender: Validator,
     seqNum: Long,
+    finStateHash: ByteString,
     preStateHash: ByteString,
     postStateHash: ByteString,
     justifications: List[BlockHash],
@@ -127,7 +140,9 @@ final case class BlockMessage(
     state: RholangState,
     // Block signature
     sigAlgorithm: String,
-    sig: ByteString
+    sig: ByteString,
+    view: View[Validator],
+    fringe: List[BlockHash]
 ) extends CasperMessage {
   def toProto: BlockMessageProto = BlockMessage.toProto(this)
 
@@ -146,6 +161,7 @@ object BlockMessage {
       bm.blockNumber,
       bm.sender,
       bm.seqNum,
+      bm.finStateHash,
       bm.preStateHash,
       bm.postStateHash,
       bm.justifications,
@@ -155,7 +171,9 @@ object BlockMessage {
       bm.rejectedSenders.toSet,
       state,
       bm.sigAlgorithm,
-      bm.sig
+      bm.sig,
+      View(bm.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
+      bm.fringe
     )
 
   def toProto(bm: BlockMessage): BlockMessageProto = {
@@ -188,6 +206,11 @@ object BlockMessage {
       .withState(RholangState.toProto(bm.state))
       .withSigAlgorithm(bm.sigAlgorithm)
       .withSig(bm.sig)
+      .withView(
+        bm.view.seen.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }.toList
+      )
+      .withFringe(bm.fringe)
+      .withFinStateHash(bm.finStateHash)
   }
 
 }
@@ -509,6 +532,41 @@ object StoreItemsMessageRequest {
 
   def toProto(x: StoreItemsMessageRequest): StoreItemsMessageRequestProto =
     StoreItemsMessageRequestProto(x.startPath.map(StoreNodeKey.toProto).toList, x.skip, x.take)
+}
+
+final case class ProposeSlot(validator: ByteString, seqNum: Long) extends CasperMessage {
+  override def toProto: CasperMessageProto = ProposeSlot.toProto(this)
+}
+
+object ProposeSlot {
+  def from(x: ProposeSlotProto): ProposeSlot    = ProposeSlot(x.validator, x.seqNum)
+  def toProto(x: ProposeSlot): ProposeSlotProto = ProposeSlotProto(x.validator, x.seqNum)
+}
+
+final case class BootstrapDataMessage(
+    tips: Seq[BlockHash],
+    lowerBound: Set[ProposeSlot]
+) extends CasperMessage {
+  override def toProto: BootstrapDataProto = BootstrapDataMessage.toProto(this)
+}
+
+object BootstrapDataMessage {
+  def from(x: BootstrapDataProto): BootstrapDataMessage =
+    BootstrapDataMessage(
+      x.tips,
+      x.lowerBound.map(ProposeSlot.from).toSet
+    )
+  def toProto(x: BootstrapDataMessage): BootstrapDataProto =
+    BootstrapDataProto(
+      x.tips,
+      x.lowerBound.map(ProposeSlot.toProto).toSeq
+    )
+
+  implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
+    override def show(t: BootstrapDataMessage): String =
+      s"tips: ${t.tips.map(_.toHexString.take(8))}, lowerBound: ${t.lowerBound
+        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}"
+  }
 }
 
 final case class StoreItemsMessage(

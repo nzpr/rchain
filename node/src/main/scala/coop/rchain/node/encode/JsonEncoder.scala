@@ -2,7 +2,13 @@ package coop.rchain.node.encode
 
 import com.google.protobuf.ByteString
 import coop.rchain.casper.PrettyPrinter
-import coop.rchain.casper.protocol.{BondInfo, JustificationInfo, LightBlockInfo}
+import coop.rchain.casper.protocol.{
+  BondInfo,
+  JustificationInfo,
+  LightBlockInfo,
+  ViewInfo,
+  ViewProto
+}
 import coop.rchain.crypto.hash.Blake2b512Random
 import coop.rchain.models.Connective.ConnectiveInstance
 import coop.rchain.models.Expr.ExprInstance
@@ -22,6 +28,7 @@ object JsonEncoder {
   implicit val encodeByteString: Encoder[ByteString] =
     Encoder.encodeString.contramap[ByteString](PrettyPrinter.buildStringNoLimit)
   implicit val encodeBondInfo: Encoder[BondInfo] = deriveEncoder[BondInfo]
+  implicit val encodeView: Encoder[ViewInfo]     = deriveEncoder[ViewInfo]
   implicit val encodeJustificationInfo: Encoder[JustificationInfo] =
     deriveEncoder[JustificationInfo]
   implicit val encodeLightBlockInfo: Encoder[LightBlockInfo] = deriveEncoder[LightBlockInfo]
@@ -88,6 +95,7 @@ object JsonEncoder {
   implicit val decodeByteString: Decoder[ByteString] =
     Decoder.decodeString.map[ByteString](s => s.unsafeHexToByteString)
   implicit val decodeBondInfo: Decoder[BondInfo] = deriveDecoder[BondInfo]
+  implicit val decodeViewInfo: Decoder[ViewInfo] = deriveDecoder[ViewInfo]
   implicit val decodeJustificationInfo: Decoder[JustificationInfo] =
     deriveDecoder[JustificationInfo]
   implicit val decodeLightBlockInfo: Decoder[LightBlockInfo] = deriveDecoder[LightBlockInfo]

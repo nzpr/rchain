@@ -8,6 +8,7 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash
 import coop.rchain.models.block.StateHash.StateHash
+import coop.rchain.sdk.dag.View
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.listOfN
 import org.scalacheck.util.Buildable
@@ -97,6 +98,7 @@ object blockImplicits {
   def blockElementGen(
       setBlockNumber: Option[Long] = Some(0L),
       setSeqNumber: Option[Long] = Some(0L),
+      setFinStateHash: Option[StateHash] = None,
       setPreStateHash: Option[StateHash] = None,
       setPostStateHash: Option[StateHash] = None,
       setValidator: Option[Validator] = None,
@@ -109,6 +111,10 @@ object blockImplicits {
       hashF: Option[BlockMessage => BlockHash] = None
   ): Gen[BlockMessage] =
     for {
+      finStateHash <- if (setFinStateHash.isEmpty)
+                       arbitrary[StateHash](arbitraryStateHash)
+                     else Gen.const(setPreStateHash.get)
+
       preStatehash <- if (setPreStateHash.isEmpty)
                        arbitrary[StateHash](arbitraryStateHash)
                      else Gen.const(setPreStateHash.get)
@@ -140,6 +146,7 @@ object blockImplicits {
         justifications = justifications.toList,
         sender = validator,
         seqNum = setSeqNumber.get,
+        finStateHash = finStateHash,
         preStateHash = preStatehash,
         postStateHash = postStatehash,
         bonds = bonds,
@@ -148,7 +155,9 @@ object blockImplicits {
         rejectedSenders = Set.empty,
         state = RholangState(deploys = deploys.toList, systemDeploys = setSysDeploys.toList.flatten),
         sigAlgorithm = Secp256k1.name,
-        sig = ByteString.EMPTY
+        sig = ByteString.EMPTY,
+        view = View.semigroupDagSeen.empty,
+        fringe = List.empty[BlockHash]
       )
       blockHash <- if (hashF.isEmpty) arbitrary[BlockHash](arbitraryBlockHash)
                   else Gen.const(hashF.get(block))
@@ -181,6 +190,7 @@ object blockImplicits {
   def getRandomBlock(
       setBlockNumber: Option[Long] = Some(0L),
       setSeqNumber: Option[Long] = Some(0L),
+      setFinStateHash: Option[StateHash] = None,
       setPreStateHash: Option[StateHash] = None,
       setPostStateHash: Option[StateHash] = None,
       setValidator: Option[Validator] = None,
@@ -195,6 +205,7 @@ object blockImplicits {
     blockElementGen(
       setBlockNumber,
       setSeqNumber,
+      setFinStateHash,
       setPreStateHash,
       setPostStateHash,
       setValidator,

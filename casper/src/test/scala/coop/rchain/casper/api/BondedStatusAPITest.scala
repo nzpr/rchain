@@ -138,7 +138,6 @@ class BondedStatusAPITest
         Set(gB.blockHash) -> FringeData(
           FringeData.fringeHash(Set.empty),
           Set.empty,
-          Set.empty,
           gB.blockHash.toBlake2b256Hash,
           Set.empty,
           Set.empty,

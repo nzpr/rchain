@@ -14,10 +14,11 @@ import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeMana
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.casper.{PrettyPrinter, ValidatorIdentity}
 import coop.rchain.metrics.{Metrics, Span}
-import coop.rchain.models.BlockVersion
+import coop.rchain.models.{BlockMetadata, BlockVersion}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.Log
 
 final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
@@ -92,18 +93,24 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
       case Some((postStateHash, processedDeploys, processedSystemDeploys)) =>
         // Create block and calculate block hash
         val state = RholangState(processedDeploys.toList, processedSystemDeploys.toList)
+        val view = View
+          .compute[Validator, BlockMetadata](preState.justifications, _.sender, _.seqNum, _.view)
+
         val unsignedBlock = ProtoUtil.unsignedBlockProto(
           version = BlockVersion.Current,
           shardId,
           blockData.blockNumber,
           creatorsPk,
           blockData.seqNum,
+          preState.fringeState.toByteString,
           preStateHash.toByteString,
           postStateHash,
           parents.toList,
           bondsMap,
           finalization,
-          state
+          state,
+          view,
+          preState.fringe.toList.sorted
         )
 
         // Sign a block (hash should not be changed)

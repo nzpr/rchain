@@ -80,9 +80,9 @@ object BlockMetadata {
       b.bonds,
       validated = false,
       validationFailed = false,
-      fringe = Set(),
-      fringeStateHash = RadixHistory.emptyRootHash.toByteString,
+      fringe = b.fringe.toSet,
+      fringeStateHash = b.finStateHash,
       memberOfFringe = none,
-      view = View.semigroupDagSeen.empty
+      view = b.view
     )
 }

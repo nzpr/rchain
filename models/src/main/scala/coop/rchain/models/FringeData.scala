@@ -10,7 +10,7 @@ import scodec.bits.ByteVector
 final case class FringeData(
     fringeHash: Blake2b256Hash,
     fringe: Set[BlockHash],
-    fringeDiff: Set[BlockHash],
+    // fringeDiff: Set[BlockHash],
     stateHash: Blake2b256Hash,
     // Rejected data in finalized fringe
     rejectedDeploys: Set[ByteString],
@@ -38,7 +38,7 @@ object FringeData {
   def from(b: FringeDataProto) = FringeData(
     b.fringeHash.toBlake2b256Hash,
     b.fringe.toSet,
-    b.fringeDiff.toSet,
+//    b.fringeDiff.toSet,
     b.stateHash.toBlake2b256Hash,
     b.rejectedDeploys.toSet,
     b.rejectedBlocks.toSet,
@@ -48,7 +48,7 @@ object FringeData {
   def toProto(b: FringeData) = FringeDataProto(
     b.fringeHash.toByteString,
     b.fringe.toList,
-    b.fringeDiff.toList,
+    //b.fringeDiff.toList,
     b.stateHash.toByteString,
     b.rejectedDeploys.toList,
     b.rejectedBlocks.toList,

@@ -9,6 +9,7 @@ import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
 import coop.rchain.casper.blocks.{BlockReceiver, BlockRetriever}
+import coop.rchain.casper.dag.BlockDagKeyValueStorage
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.syntax._
 import coop.rchain.comm.PeerNode
@@ -16,6 +17,7 @@ import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.Metrics
 import coop.rchain.models.BlockHash.BlockHash
+import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.{RSpaceExporter, RSpaceStateManager}
 import coop.rchain.shared.syntax._
@@ -34,12 +36,14 @@ object NodeRunning {
   (
       blockProcessingQueue: Channel[F, BlockMessage],
       validatorId: Option[ValidatorIdentity],
-      disableStateExporter: Boolean
+      disableStateExporter: Boolean,
+      deployLifespan: Long = MultiParentCasper.deployLifespan.toLong
   ): F[NodeRunning[F]] = Sync[F].delay(
     new NodeRunning[F](
       blockProcessingQueue,
       validatorId,
-      disableStateExporter
+      disableStateExporter,
+      deployLifespan
     )
   )
 
@@ -178,6 +182,17 @@ object NodeRunning {
       TransportLayer[F].streamToPeer(peer, finalizedFringe.toProto) >>
       Log[F].info(s"FinalizedFringe sent to ${peer}")
 
+  /**
+    * Peer asks for FinalizedFringe
+    */
+  def handleBootstrapDataRequest[F[_]: Monad: TransportLayer: RPConfAsk: Log](
+      peer: PeerNode,
+      bootstrapData: BootstrapDataMessage
+  ): F[Unit] =
+    Log[F].info(s"Received bootstrap request from ${peer}") >>
+      TransportLayer[F].streamToPeer(peer, bootstrapData.toProto) >>
+      Log[F].info(s"Bootstrap data sent to ${peer}")
+
   private def handleStateItemsMessageRequest[F[_]: Sync: TransportLayer: RPConfAsk: RSpaceStateManager: Log](
       peer: PeerNode,
       startPath: Seq[(Blake2b256Hash, Option[Byte])],
@@ -220,7 +235,8 @@ class NodeRunning[F[_]
 (
     incomingBlocksQueue: Channel[F, BlockMessage],
     validatorId: Option[ValidatorIdentity],
-    disableStateExporter: Boolean
+    disableStateExporter: Boolean,
+    deployLifespan: Long
 ) {
   import NodeRunning._
 
@@ -288,41 +304,22 @@ class NodeRunning[F[_]
       for {
         dag <- BlockDagStorage[F].getRepresentation
 
-        // Respond with latest finalized fringe
-        // TODO: optimize response to read from cache
-        latestFringeHashes    = dag.dagMessageState.latestFringe.map(_.id)
-        fringeData            = dag.fringeStates(latestFringeHashes)
-        latestFringeStateHash = fringeData.stateHash
+        lms = dag.dagMessageState.latestMsgs.map(_.id)
 
-        // states of fringes referenced by last 100 blocks
-        // TODO this is a hack to make merging work
-        //  since final fringes are merged. It should not be done this way
-        blocksRange = dag.heightMap
-          .takeRight(100)
-          .values
-          .flatten
-          .toList
-        miscFinalStateHashes = blocksRange
-          .map(x => dag.dagMessageState.msgMap(x).fringe)
-          .map(dag.fringeStates)
-          .map(_.stateHash.toByteString)
-          .toSet
-        mistPrePostStateHashes <- blocksRange
-                                   .traverse(BlockStore[F].getUnsafe)
-                                   .map(_.flatMap(b => List(b.preStateHash, b.postStateHash)))
-        miscStateHashes = miscFinalStateHashes ++ mistPrePostStateHashes
+        lowerBound = {
+          val x = BlockDagKeyValueStorage
+            .dbPruneFringe(dag.dagMessageState, dag.childMap)
+            // TODO this "- deployLifespan" is because double space of search for double spend might
+            //  be bigger then required to restore the state. Make it proper to download minimum.
+            .map(x => ProposeSlot(x.sender, x.senderSeq - deployLifespan))
+          if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
+        }
 
-        fringeResponse = FinalizedFringe(
-          latestFringeHashes.toList,
-          latestFringeStateHash.toByteString,
-          miscStateHashes
-        )
+        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound)
 
-        _ <- handleFinalizedFringeRequest(peer, fringeResponse)
+        _ <- handleBootstrapDataRequest(peer, bootstrapDataMsg)
 
-        fringeStr      = PrettyPrinter.buildString(fringeResponse.hashes)
-        fringeStateStr = PrettyPrinter.buildString(latestFringeStateHash.toByteString)
-        _              <- Log[F].info(s"Sent fringe response ($fringeStateStr) $fringeStr.")
+        _ <- Log[F].info(s"Sent bootstrap data (${bootstrapDataMsg.show}.")
       } yield ()
 
     // Approved state store records

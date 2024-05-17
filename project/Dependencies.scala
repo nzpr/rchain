@@ -4,10 +4,10 @@ object Dependencies {
 
   val osClassifier: String = Detector.detect(Seq("fedora")).osClassifier
 
-  val catsVersion       = "2.9.0"
-  val catsEffectVersion = "3.4.8"
+  val catsVersion       = "2.10.0"
+  val catsEffectVersion = "3.5.4"
   val catsMtlVersion    = "0.7.1"
-  val fs2Version        = "3.6.1"
+  val fs2Version        = "3.10.2"
   val http4sVersion     = "0.23.6"
   val endpointsVersion  = "1.9.0"
   val circeVersion      = "0.14.1"

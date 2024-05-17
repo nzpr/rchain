@@ -95,7 +95,7 @@ object LfsTupleSpaceRequester {
     * @return fs2.Stream processing all tuple space state
     */
   def stream[F[_]: Async: Log](
-      fringe: FinalizedFringe,
+      states: List[Blake2b256Hash],
       tupleSpaceMessageQueue: Channel[F, StoreItemsMessage],
       requestForStoreItem: (StatePartPath, Int) => F[Unit],
       requestTimeout: FiniteDuration,
@@ -248,13 +248,8 @@ object LfsTupleSpaceRequester {
       } yield createStream(st, requestQueue)
     }
 
-    // load final state hash + auxiliary hashes (TODO remove these)
-    val toLoad = (fringe.stateHashes + fringe.stateHash)
-      .map(Blake2b256Hash.fromByteString)
-      .toList
-
-    Log[F].info(s"Loading tuple space state for ${toLoad.mkString("; ")}") *>
-      toLoad
+    Log[F].info(s"Loading tuple space state for ${states.mkString("; ")}") *>
+      states
         .traverse(loadState)
         .map(Stream.emits(_).flatten)
   }

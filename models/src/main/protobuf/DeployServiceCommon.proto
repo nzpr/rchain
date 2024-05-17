@@ -112,6 +112,12 @@ message DeployInfo{
   string systemDeployError     = 11;
 }
 
+message ViewInfo {
+  string validator = 1;
+  int64 seqStart = 2;
+  int64 seqEnd = 3;
+}
+
 message LightBlockInfo {
   // BlockMessageProto message
   int32  version                 =  1;
@@ -133,6 +139,9 @@ message LightBlockInfo {
 
   // Rejected data
   repeated string rejectedDeploys = 16;
+
+  // View
+  repeated ViewInfo view = 17;
 }
 
 // For node clients, see BlockMessage for actual Casper protocol Block representation

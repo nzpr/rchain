@@ -19,7 +19,8 @@ object BondsParser {
     *     - https://typelevel.org/cats-effect/docs/migration-guide#blocker
     */
   def parse[F[_]: Async: Log](bondsPath: Path): F[Map[PublicKey, Long]] =
-    Files[F]
+    Files
+      .forAsync[F]
       .readAll(bondsPath)
       .through(text.utf8.decode)
       .through(text.lines)
@@ -63,7 +64,8 @@ object BondsParser {
   ): F[Map[PublicKey, Long]] = {
     val bondsPath = Path(bondsPathStr)
 
-    Files[F]
+    Files
+      .forAsync[F]
       .exists(bondsPath)
       .ifM(
         Log[F].info(s"Parsing bonds file $bondsPath.") >> parse(bondsPath),
@@ -84,7 +86,7 @@ object BondsParser {
     val bonds        = pubKeys.iterator.zipWithIndex.toMap.view.mapValues(_.toLong + 1L).toMap
 
     def toFile(filePath: Path): Pipe[F, String, Unit] =
-      _.through(text.utf8.encode).through(Files[F].writeAll(filePath))
+      _.through(text.utf8.encode).through(Files.forAsync[F].writeAll(filePath))
 
     // Write generated `<public_key>.sk` files with private key as content
     def writeSkFiles =
@@ -113,7 +115,7 @@ object BondsParser {
       toFile(bondsFilePath)(bondsStream).compile.drain
     }
 
-    Files[F].createDirectories(genesisFolder) *>
+    Files.forAsync[F].createDirectories(genesisFolder) *>
       writeSkFiles *> writeBondsFile *> bonds.pure[F]
 
   }

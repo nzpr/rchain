@@ -9,6 +9,7 @@ import coop.rchain.casper.protocol._
 import coop.rchain.casper.protocol.deploy.v1.DeployExecStatus
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.models.Validator.Validator
+import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.models.{BlockMetadata, Par}
 
 trait BlockApi[F[_]] {
@@ -110,6 +111,9 @@ object BlockApi {
       blockSize = block.toProto.serializedSize.toString,
       deployCount = block.state.deploys.length,
       justifications = block.justifications.map(PrettyPrinter.buildStringNoLimit),
-      rejectedDeploys = block.rejectedDeploys.toSeq.map(PrettyPrinter.buildStringNoLimit)
+      rejectedDeploys = block.rejectedDeploys.toSeq.map(PrettyPrinter.buildStringNoLimit),
+      view = block.view.seen.map {
+        case (v, r) => ViewInfo(v.toHexString, r.start.toLong, r.end.toLong)
+      }.toList
     )
 }

@@ -12,10 +12,12 @@ import coop.rchain.casper.rholang.BlockRandomSeed
 import coop.rchain.casper.util.{ConstructDeploy, ProtoUtil, RSpaceUtil}
 import coop.rchain.comm.rp.ProtocolHelper.packet
 import coop.rchain.crypto.signatures.{Secp256k1, Signed}
+import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.PCost
 import coop.rchain.models.syntax._
 import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
+import coop.rchain.sdk.dag.View
 import coop.rchain.shared.scalatestcontrib._
 import coop.rchain.shared.syntax._
 import org.scalatest.Inspectors
@@ -478,6 +480,7 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
         blockNumber = 1,
         sender = ByteString.EMPTY,
         seqNum = 0,
+        finStateHash = ByteString.EMPTY,
         preStateHash = ByteString.EMPTY,
         postStateHash = ByteString.EMPTY,
         serializedJustifications,
@@ -487,7 +490,9 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
         rejectedSenders = Set.empty,
         state,
         sigAlgorithm = "",
-        sig = ByteString.EMPTY
+        sig = ByteString.EMPTY,
+        view = View.semigroupDagSeen.empty,
+        fringe = List.empty[BlockHash]
       )
     ValidatorIdentity(randomValidatorSks(1))
       .signBlock(

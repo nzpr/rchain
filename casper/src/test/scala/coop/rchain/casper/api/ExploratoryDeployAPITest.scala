@@ -117,7 +117,6 @@ class ExploratoryDeployAPITest
         Set.empty -> FringeData(
           Blake2b256Hash.create(Blake2b256.hash("".getBytes)),
           Set.empty,
-          Set.empty,
           RuntimeManager.emptyStateHashFixed.toBlake2b256Hash,
           Set.empty,
           Set.empty,
