@@ -122,8 +122,10 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
             ) >>
               channelsMap.update(_ - peer) >> getChannel(peer, d)
           else c.pure[F]
+      // TODO this is messy, do not leave fiber without control
       _ <- Sync[F]
             .start(r.buferSubscriber.compile.drain)
+            .whenA(newChannel)
             .onError {
               case err =>
                 Log[F].error(s"Outbound gPRC channel to peer ${peer.toAddress} failed: $err") >>
