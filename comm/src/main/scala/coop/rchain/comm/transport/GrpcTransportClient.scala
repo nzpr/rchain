@@ -2,6 +2,7 @@ package coop.rchain.comm.transport
 
 import cats.Applicative
 import cats.effect.kernel.Resource
+import cats.effect.kernel.Resource.ExitCase.{Canceled, Errored, Succeeded}
 import cats.effect.std.Dispatcher
 import cats.effect.syntax.all._
 import cats.effect.{Async, Sync}
@@ -100,7 +101,10 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
       channel = BufferedGrpcStreamChannel(grpcChannel, buffer, buferSubscriber.interruptWhen(sig))
     } yield channel
 
-  private def getChannel(peer: PeerNode, d: Dispatcher[F]): F[BufferedGrpcStreamChannel[F]] =
+  private def getChannel(
+      peer: PeerNode,
+      d: Dispatcher[F]
+  ): F[BufferedGrpcStreamChannel[F]] =
     for {
       cDefNew <- Deferred[F, BufferedGrpcStreamChannel[F]]
       ret <- channelsMap.modify[(Deferred[F, BufferedGrpcStreamChannel[F]], Boolean)] { chMap =>
@@ -114,22 +118,8 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
       (cDef, newChannel) = ret
       _                  <- Applicative[F].whenA(newChannel)(createChannel(peer, d) >>= cDef.complete)
       c                  <- cDef.get
-      // In case underlying gRPC transport is terminated - clean resources,
-      // remove current record and try one more time
-      r <- if (c.grpcTransport.isTerminated)
-            Log[F].info(
-              s"Channel to peer ${peer.toAddress} is terminated, removing from connections map"
-            ) >>
-              channelsMap.update(_ - peer) >> getChannel(peer, d)
+      r <- if (c.grpcTransport.isTerminated) channelsMap.update(_ - peer) >> getChannel(peer, d)
           else c.pure[F]
-      _ <- Sync[F]
-            .start(r.buferSubscriber.compile.drain)
-            .onError {
-              case err =>
-                Log[F].error(s"Outbound gPRC channel to peer ${peer.toAddress} failed: $err") >>
-                  channelsMap.update(_ - peer)
-            }
-            .onCancel { channelsMap.update(_ - peer) }
     } yield r
 
   private def withClient[A](peer: PeerNode, timeout: FiniteDuration)(
@@ -145,6 +135,7 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
           ClientOptions.default.configureCallOptions(_ => co)
         )
         result <- request(stub)
+
       } yield result).attempt.map(_.fold(e => Left(protocolException(e)), identity))
     }
   }
@@ -163,7 +154,9 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
     Stream
       .fromIterator(peers.iterator, 1)
       .parEvalMapUnorderedProcBounded { peer =>
-        getChannel(peer, d).flatMap(_.buffer._1(blob))
+        getChannel(peer, d).flatMap { ch =>
+          ch.buffer._1(blob) >> ch.buferSubscriber.compile.lastOrError
+        }
       }
       .compile
       .drain
