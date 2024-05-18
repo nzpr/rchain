@@ -40,13 +40,15 @@ final class RuntimeManagerOps[F[_]](private val rm: RuntimeManager[F]) extends A
         .get
         .map(_.toByteVector)
 
-    def mergeableStoreError =
-      new Exception(s"Mergeable store invalid state hash ${stateHash.bytes.toHex}.")
+    def mergeableStoreError(key: String) =
+      new Exception(
+        s"Mergeable store invalid state hash ${stateHash.bytes.toHex}. (key ${key})"
+      )
 
     for {
       key    <- getKey
       resOpt <- rm.getMergeableStore.get1(key)
-      res    <- resOpt.liftTo(mergeableStoreError)
+      res    <- resOpt.liftTo(mergeableStoreError(key.toHex))
       resMrg = res.map(_.channels.map(x => (x.hash, x.diff)).toMap)
     } yield resMrg
   }

@@ -105,12 +105,6 @@ object MultiParentCasper {
                                 dag.hashLookup.getUnsafe
                               )
                             for {
-                              _ <- Log[F].error(
-                                    s"Multiple parents detected for a message (${fringe
-                                      .map(_.toHexString.take(8))}). Merging is not supported"
-                                  )
-                              // Sleep instead iof throwing exception to be able to query node.
-                              _ <- Sync[F].sleep(Int.MaxValue.seconds)
                               baseStateOpt <- baseOpt.traverse { h =>
                                                BlockStore[F]
                                                  .getUnsafe(h)
@@ -170,12 +164,6 @@ object MultiParentCasper {
                                          dag.hashLookup.getUnsafe
                                        )
                                      for {
-                                       _ <- Log[F].error(
-                                             s"Multiple parents detected for a message (${ps
-                                               .map(_.toHexString.take(8))}). Merging is not supported"
-                                           )
-                                       // Sleep instead iof throwing exception to be able to query node.
-                                       _ <- Sync[F].sleep(Int.MaxValue.seconds)
                                        baseStateOpt <- baseOpt.traverse { h =>
                                                         BlockStore[F]
                                                           .getUnsafe(h)
@@ -260,27 +248,24 @@ object MultiParentCasper {
     val blockPostState = block.postStateHash
     val blockSender    = block.sender.toByteArray
 
-    // TODO: skip creating block index if already in cache
-    // TODO: implement index invalidation when enabling indexing back, otherwise it leaks memory
-    val indexBlock = Sync[F].unit
-//      for {
-//      mergeableChs <- RuntimeManager[F].loadMergeableChannels(
-//                       blockPostState,
-//                       blockSender,
-//                       block.seqNum
-//                     )
-//
-//      index <- BlockIndex(
-//                block.blockHash,
-//                block.state.deploys,
-//                block.state.systemDeploys,
-//                blockPreState.toBlake2b256Hash,
-//                blockPostState.toBlake2b256Hash,
-//                RuntimeManager[F].getHistoryRepo,
-//                mergeableChs
-//              )
-//      _ = BlockIndex.cache.putIfAbsent(block.blockHash, index)
-//    } yield ()
+    val indexBlock = for {
+      mergeableChs <- RuntimeManager[F].loadMergeableChannels(
+                       blockPostState,
+                       blockSender,
+                       block.seqNum
+                     )
+
+      index <- BlockIndex(
+                block.blockHash,
+                block.state.deploys,
+                block.state.systemDeploys,
+                blockPreState.toBlake2b256Hash,
+                blockPostState.toBlake2b256Hash,
+                RuntimeManager[F].getHistoryRepo,
+                mergeableChs
+              )
+      _ = BlockIndex.cache.putIfAbsent(block.blockHash, index)
+    } yield ()
 
     val validationProcessDiag = for {
       // Create block and measure duration
