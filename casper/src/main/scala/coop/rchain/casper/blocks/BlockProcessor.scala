@@ -28,7 +28,7 @@ object BlockProcessor {
       shardId: String,
       minPhloPrice: Long
   ): Stream[F, (BlockMessage, ValidBlockProcessing)] =
-    inputBlocks.parEvalMapUnorderedProcBounded { block =>
+    inputBlocks.parEvalMapProcBounded { block =>
       for {
         // Validate block and add it to the DAG
         result <- validateAndAddToDag(block, shardId, minPhloPrice)
