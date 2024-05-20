@@ -91,7 +91,7 @@ object NodeLaunch {
         validatorId <- ValidatorIdentity.fromPrivateKeyWithLogging[F](conf.validatorPrivateKey)
         finished    <- Deferred[F, Unit]
         engine      <- NodeSyncing[F](finished, validatorId, trimState)
-        handleMessages = packets.parEvalMapUnorderedProcBounded { pm =>
+        handleMessages = packets.parEvalMapProcBounded { pm =>
           engine.handle(pm.peer, pm.message)
         }
         _ <- CommUtil[F].requestFinalizedFringe(trimState)
@@ -101,7 +101,7 @@ object NodeLaunch {
     def startRunningMode: F[Unit] =
       for {
         engine <- NodeRunning[F](incomingBlocksQueue, validatorIdentityOpt, disableStateExporter)
-        handleMessages = packets.parEvalMapUnorderedProcBounded { pm =>
+        handleMessages = packets.parEvalMapProcBounded { pm =>
           engine.handle(pm.peer, pm.message)
         }
         _ <- Log[F].info(s"Making a transition to Running state.")

@@ -241,7 +241,7 @@ object BlockReceiver {
           // Filter (ignore) blocks that are not of interest (pass integrity check, incorrect shard or version, ...)
           checkIfOfInterest(block).flatTap(logMalformed(block).unlessA(_))
         }
-        .parEvalMapUnorderedProcBounded { block =>
+        .parEvalMapProcBounded { block =>
           // Start block checking, mark begin of checking in the state (begin received "transaction")
           val shouldCheck = state.modify(_.beginStored(block.blockHash))
           // Save block to store, mark end of checking in the state (end received "transaction")
@@ -293,7 +293,7 @@ object BlockReceiver {
 
     // Process validated blocks
     def validatedBlocks(receiverOutputQueue: Channel[F, BlockHash]) =
-      finishedProcessingStream.parEvalMapUnorderedProcBounded { block =>
+      finishedProcessingStream.parEvalMapProcBounded { block =>
         val parents = block.justifications.toSet
         for {
           // Update state with finalized block and get next for validation
