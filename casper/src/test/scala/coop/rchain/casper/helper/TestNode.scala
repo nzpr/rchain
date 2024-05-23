@@ -110,9 +110,9 @@ case class TestNode[F[_]: Async](
           }
       r <- v match {
             case ProposerSuccess(_, b) => b.blockHash.pure[F]
-            case _ =>
+            case e =>
               Sync[F]
-                .raiseError(new Exception("Propose failed or another in progress"))
+                .raiseError(new Exception(s"Propose failed: $e"))
                 .as(ByteString.EMPTY)
           }
     } yield r

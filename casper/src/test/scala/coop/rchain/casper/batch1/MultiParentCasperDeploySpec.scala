@@ -27,16 +27,26 @@ class MultiParentCasperDeploySpec
       val List(node0, node1) = nodes.toList
       for {
 
-        deploy             <- ConstructDeploy.basicDeployData[Effect](0, shardId = genesis.genesisBlock.shardId)
-        _                  <- node0.propagateBlock(deploy)(node1)
-        _                  <- node0.blockDagStorage.addDeploy(deploy)
+        deploy0 <- ConstructDeploy
+                    .basicDeployData[Effect](0, shardId = genesis.genesisBlock.shardId)
+        _ <- node0.propagateBlock(deploy0)(node1)
+        // add the same deploy to node 1
+        _ <- node1.blockDagStorage.addDeploy(deploy0)
+        // add one more deploy to node 1
+        deploy1 <- ConstructDeploy
+                    .basicDeployData[Effect](0, shardId = genesis.genesisBlock.shardId)
+        _                  <- node1.blockDagStorage.addDeploy(deploy1)
         createBlockResult2 <- node1.proposeSync.attempt
-        _                  = createBlockResult2 shouldBe a[Right[_, _]]
-        hash               = createBlockResult2.value
-        deploys            <- node1.blockStore.get1(hash).map(_.map(_.state).map(x => x.deploys))
+        // block should be created
+        _    = createBlockResult2 shouldBe a[Right[_, _]]
+        hash = createBlockResult2.value
+        // but deploy0 should not be there, only deploy1
+        deploys <- node1.blockStore
+                    .get1(hash)
+                    .map(_.map(_.state).map(x => x.deploys.map(_.deploy.sig)))
       } yield {
         deploys.isDefined shouldBe true
-        deploys.get should have size 0
+        deploys.get shouldBe List(deploy1.sig)
       }
     }
   }

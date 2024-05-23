@@ -492,7 +492,8 @@ class MultiParentCasperAddBlockSpec extends AnyFlatSpec with Matchers with Inspe
         sigAlgorithm = "",
         sig = ByteString.EMPTY,
         view = View.semigroupDagSeen.empty,
-        fringe = List.empty[BlockHash]
+        fringe = List.empty[BlockHash],
+        mergeables = Seq()
       )
     ValidatorIdentity(randomValidatorSks(1))
       .signBlock(

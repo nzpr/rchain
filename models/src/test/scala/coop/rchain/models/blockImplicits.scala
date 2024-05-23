@@ -157,7 +157,8 @@ object blockImplicits {
         sigAlgorithm = Secp256k1.name,
         sig = ByteString.EMPTY,
         view = View.semigroupDagSeen.empty,
-        fringe = List.empty[BlockHash]
+        fringe = List.empty[BlockHash],
+        mergeables = Seq()
       )
       blockHash <- if (hashF.isEmpty) arbitrary[BlockHash](arbitraryBlockHash)
                   else Gen.const(hashF.get(block))
