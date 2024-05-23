@@ -1,5 +1,6 @@
 package coop.rchain.casper.merging
 
+import cats.Show
 import cats.effect.Async
 import cats.syntax.all._
 import com.google.protobuf.ByteString
@@ -8,6 +9,7 @@ import coop.rchain.blockstorage.syntax._
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.FringeData
 import coop.rchain.models.Validator.Validator
+import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.rholang.interpreter.RhoRuntime.RhoHistoryRepository
 import coop.rchain.rholang.interpreter.merging.RholangMergingLogic
 import coop.rchain.rholang.syntax._
@@ -64,6 +66,8 @@ object MergeScope {
       dagData: Map[BlockHash, Message[BlockHash, Validator]],
       lookup: ((Validator, Long)) => Set[BlockHash]
   ): (MergeScope, Option[BlockHash]) = {
+    implicit val hashShow: Show[BlockHash] = Show.show[BlockHash](_.toHexString)
+
     val pruneFringe = dagData.pruneFringe(finalFringe, childMap).map(_.id)
     def hl(v: Validator, sN: Long): BlockHash = {
       val l = lookup((v, sN))
@@ -80,6 +84,8 @@ object MergeScope {
       dagData: Map[BlockHash, Message[BlockHash, Validator]],
       lookup: (Validator, Long) => BlockHash
   ): (MergeScope, Option[BlockHash]) = {
+
+    implicit val hashShow = Show.show[BlockHash](_.toHexString)
 
     // Conflict scope
     val cScopeIds = dagData.between(mergeFringe, finalFringe, lookup, IncludeTop)

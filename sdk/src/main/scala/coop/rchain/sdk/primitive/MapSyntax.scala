@@ -1,5 +1,8 @@
 package coop.rchain.sdk.primitive
 
+import cats.Show
+import cats.implicits.toShow
+
 import scala.collection.mutable
 
 trait MapSyntax {
@@ -12,6 +15,12 @@ final class MapOps[K, V](private val map: Map[K, V]) extends AnyVal {
   def getUnsafe(k: K): V = {
     val vOpt = map.get(k)
     require(vOpt.isDefined, s"No key $k in a map.")
+    vOpt.get
+  }
+
+  def getUnsafeShow(k: K)(implicit showK: Show[K]): V = {
+    val vOpt = map.get(k)
+    require(vOpt.isDefined, s"No key ${k.show} in a map.")
     vOpt.get
   }
 }

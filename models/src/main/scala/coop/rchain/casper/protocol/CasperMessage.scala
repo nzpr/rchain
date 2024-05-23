@@ -142,7 +142,8 @@ final case class BlockMessage(
     sigAlgorithm: String,
     sig: ByteString,
     view: View[Validator],
-    fringe: List[BlockHash]
+    fringe: List[BlockHash],
+    mergeables: Seq[Map[Blake2b256Hash, Long]] // TODO this should not be on a block?
 ) extends CasperMessage {
   def toProto: BlockMessageProto = BlockMessage.toProto(this)
 
@@ -173,7 +174,11 @@ object BlockMessage {
       bm.sigAlgorithm,
       bm.sig,
       View(bm.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
-      bm.fringe
+      bm.fringe,
+      bm.mergeables.map {
+        case DeploysChannelDiff(x) =>
+          x.map { case ChannelDiffs(c, d) => c.toBlake2b256Hash -> d }.toMap
+      }
     )
 
   def toProto(bm: BlockMessage): BlockMessageProto = {
@@ -211,6 +216,11 @@ object BlockMessage {
       )
       .withFringe(bm.fringe)
       .withFinStateHash(bm.finStateHash)
+      .withMergeables(bm.mergeables.map { x =>
+        DeploysChannelDiff(x.map {
+          case (c, d) => ChannelDiffs.apply(c.toByteString, d)
+        }.toList)
+      }.toList)
   }
 
 }

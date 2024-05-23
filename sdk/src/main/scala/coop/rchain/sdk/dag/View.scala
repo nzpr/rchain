@@ -32,15 +32,22 @@ object View {
   }
 
   def diff[S](postfix: View[S], prefix: View[S], includePolicy: IncludePolicy): View[S] = {
-    val newSeen = prefix.seen.foldLeft(postfix.seen) {
-      case (acc, (sender, range)) =>
+    val postfixOnly = postfix.seen -- prefix.seen.keys
+    val newSeen = postfix.seen.foldLeft(prefix.seen ++ postfixOnly) {
+      case (acc, (sender, range2)) =>
         acc.get(sender) match {
-          case None => acc
-          case Some(range2) =>
+          case None =>
             val newRange = includePolicy match {
-              case IncludeTop    => (range.end + 1) to (range2.end)
-              case IncludeNone   => (range.end + 1) until (range2.end)
-              case IncludeBottom => range.end until (range2.end)
+              case IncludeTop    => range2.start to range2.end
+              case IncludeNone   => range2.start until range2.end // exclusive range
+              case IncludeBottom => range2.start until range2.end // exclusive range
+            }
+            acc + (sender -> newRange)
+          case Some(range1) =>
+            val newRange = includePolicy match {
+              case IncludeTop    => (range1.end + 1) to (range2.end)
+              case IncludeNone   => (range1.end + 1) until (range2.end)
+              case IncludeBottom => range1.end until (range2.end)
             }
             acc + (sender -> newRange)
         }

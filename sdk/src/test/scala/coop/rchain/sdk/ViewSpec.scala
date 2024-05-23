@@ -24,25 +24,28 @@ class ViewSpec extends AnyFlatSpec with Matchers {
   }
 
   "Diff of views" should "create valid view" in {
-    val view1 = View(Map(1 -> Range.inclusive(1, 3), 2 -> Range.inclusive(1, 5)))
-    val view2 =
+    val prefix = View(Map(1 -> Range.inclusive(1, 3), 2 -> Range.inclusive(1, 5)))
+    val postfix =
       View(Map(1 -> Range.inclusive(1, 3), 2 -> Range.inclusive(1, 3), 3 -> Range.inclusive(1, 2)))
 
     val refTop = Map(
       1 -> Range(0, 0),
-      2 -> Range.inclusive(4, 5)
+      2 -> Range.inclusive(4, 5),
+      3 -> Range.inclusive(1, 2)
     )
     val refBottom = Map(
       1 -> Range(0, 0),
-      2 -> Range.inclusive(3, 4)
+      2 -> Range.inclusive(3, 4),
+      3 -> Range.inclusive(1, 2)
     )
     val refNone = Map(
       1 -> Range(0, 0),
-      2 -> Range.inclusive(4, 4)
+      2 -> Range.inclusive(4, 4),
+      3 -> Range.inclusive(1, 2)
     )
 
-    View.diff(view1, view2, IncludeTop).seen shouldBe refTop
-    View.diff(view1, view2, IncludeBottom).seen shouldBe refBottom
-    View.diff(view1, view2, IncludeNone).seen shouldBe refNone
+    View.diff(prefix, postfix, IncludeTop).seen shouldBe refTop
+    View.diff(prefix, postfix, IncludeBottom).seen shouldBe refBottom
+    View.diff(prefix, postfix, IncludeNone).seen shouldBe refNone
   }
 }

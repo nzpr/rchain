@@ -1,5 +1,6 @@
 package coop.rchain.blockstorage.dag
 
+import cats.Show
 import cats.kernel.Monoid
 import cats.syntax.all._
 import coop.rchain.sdk.dag.View
@@ -25,7 +26,8 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       lowerBound: Set[M],
       lookup: (S, Long) => M,
       includePolicy: IncludePolicy
-  ): Set[M] = {
+  )(implicit sM: Show[M], sS: Show[S]): Set[M] = {
+    println(s"between ${upperBound.map(_.show)} and ${lowerBound.map(_.show)}")
     val upperAsSeen = View[S](
       upperBound
         .map(msgMap.getUnsafe)
@@ -46,7 +48,11 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       )
       .seen
       .iterator
-      .flatMap { case (v, r) => r.map(_.toLong).map(v -> _) }
+      .flatMap {
+        case (v, r) =>
+          println(s"${v.show} -> $r")
+          r.map(_.toLong).map(v -> _)
+      }
       .map(lookup.tupled)
       .toSet
   }
@@ -66,14 +72,23 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
   /**
     * Lowest fringe for input messages
     */
-  def lowestFringe(msgs: Set[Message[M, S]]): Set[Message[M, S]] =
-    msgs.toList
-      .minimumByOption(
-        _.fringe.map(msgMap.getUnsafe).toList.map(_.height).minimumOption.getOrElse(-1L)
-      )
+  def lowestFringe(msgs: Set[Message[M, S]])(implicit showM: Show[M]): Set[Message[M, S]] = {
+    val x = msgs
       .map(_.fringe)
+      .toList
+      .minimumByOption { x =>
+        // empty fringe is always the lowest
+        if (x.isEmpty) Long.MinValue
+        else {
+          val fringeBottomHeight = x.map(msgMap.getUnsafeShow).toList.map(_.height)
+          fringeBottomHeight.min
+        }
+      }
       .getOrElse(Set())
-      .map(msgMap)
+
+    println(s"lowestFringe ${msgs.map(_.id.show.take(4))} => ${x.map(_.show.take(4))}")
+    x.map { msgMap.getUnsafeShow }
+  }
 
   /**
     * Finds a message with empty parents
@@ -86,5 +101,6 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
   def pruneFringe(
       finalFringe: Set[M],
       childMap: Map[M, Set[M]]
-  ): Set[Message[M, S]] = lowestFringe(finalFringe.flatMap(childMap).map(msgMap.getUnsafe))
+  )(implicit show: Show[M]): Set[Message[M, S]] =
+    lowestFringe(finalFringe.flatMap(childMap.getUnsafeShow).map(msgMap.getUnsafeShow))
 }

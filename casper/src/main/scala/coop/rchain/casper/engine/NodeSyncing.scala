@@ -26,8 +26,14 @@ import scala.concurrent.duration._
 import cats.effect.{Deferred, Ref, Temporal}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax.modelsSyntaxByteString
+import coop.rchain.rholang.interpreter.merging.RholangMergingLogic.{
+  codecMergeableKey,
+  DeployMergeableData,
+  NumberChannel
+}
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.sdk.dag.View
+import scodec.bits.ByteVector
 
 object NodeSyncing {
 
@@ -103,7 +109,23 @@ class NodeSyncing[F[_]
             _.leftTraverse(
               _ => new Exception("Channel received block message is closed").raiseError[F, Unit]
             ).map(_.merge)
+          ) *>
+        // Save mergeable data
+        {
+          // Key is composed from post-state hash and block creator with seq number
+          val key = (
+            b.postStateHash.toBlake2b256Hash.bytes,
+            ByteVector(b.sender.toByteArray),
+            b.seqNum
           )
+          val keyEncoded = codecMergeableKey.encode(key).require.toByteVector
+          val deployChannels = b.mergeables.map { v =>
+            DeployMergeableData(v.map { case (c, d) => NumberChannel(c, d) }.toSeq)
+          }
+          RuntimeManager[F].getMergeableStore.put(keyEncoded, deployChannels) >> Log[F].info(
+            s"Filled ${b.postStateHash.toHexString}, ${keyEncoded.toHex}"
+          )
+        }
 
     case _ => ().pure
   }

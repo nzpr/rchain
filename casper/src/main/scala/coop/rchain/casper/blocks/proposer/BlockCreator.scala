@@ -11,6 +11,7 @@ import coop.rchain.casper.protocol.{ProcessedDeploy, ProcessedSystemDeploy, Rhol
 import coop.rchain.casper.rholang.RuntimeManager.StateHash
 import coop.rchain.casper.rholang.sysdeploys.{CloseBlockDeploy, SlashDeploy}
 import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeManager}
+import coop.rchain.casper.syntax.casperSyntaxRuntimeManager
 import coop.rchain.casper.util.ProtoUtil
 import coop.rchain.casper.{PrettyPrinter, ValidatorIdentity}
 import coop.rchain.metrics.{Metrics, Span}
@@ -88,42 +89,47 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
       if (shouldPropose) propose.map(_.some)
       else (!suppressAttestation).guard[Option].traverse(_ => attest)
 
-    postState.map {
-      case None                                                            => BlockCreatorResult.noNewDeploys
+    postState.flatMap {
+      case None                                                            => BlockCreatorResult.noNewDeploys.pure
       case Some((postStateHash, processedDeploys, processedSystemDeploys)) =>
         // Create block and calculate block hash
         val state = RholangState(processedDeploys.toList, processedSystemDeploys.toList)
         val view = View
           .compute[Validator, BlockMetadata](preState.justifications, _.sender, _.seqNum, _.view)
 
-        val unsignedBlock = ProtoUtil.unsignedBlockProto(
-          version = BlockVersion.Current,
-          shardId,
-          blockData.blockNumber,
-          creatorsPk,
-          blockData.seqNum,
-          preState.fringeState.toByteString,
-          preStateHash.toByteString,
-          postStateHash,
-          parents.toList,
-          bondsMap,
-          finalization,
-          state,
-          view,
-          preState.fringe.toList.sorted
-        )
+        RuntimeManager[F]
+          .loadMergeableChannels(postStateHash, blockData.sender.bytes, blockData.seqNum)
+          .map { mergeables =>
+            val unsignedBlock = ProtoUtil.unsignedBlockProto(
+              version = BlockVersion.Current,
+              shardId,
+              blockData.blockNumber,
+              creatorsPk,
+              blockData.seqNum,
+              preState.fringeState.toByteString,
+              preStateHash.toByteString,
+              postStateHash,
+              parents.toList,
+              bondsMap,
+              finalization,
+              state,
+              view,
+              preState.fringe.toList.sorted,
+              mergeables
+            )
 
-        // Sign a block (hash should not be changed)
-        val signedBlock = id.signBlock(unsignedBlock)
+            // Sign a block (hash should not be changed)
+            val signedBlock = id.signBlock(unsignedBlock)
 
-        // This check is temporary until signing function will re-hash the block
-        val unsignedHash = PrettyPrinter.buildString(unsignedBlock.blockHash)
-        val signedHash   = PrettyPrinter.buildString(signedBlock.blockHash)
-        assert(
-          unsignedBlock.blockHash == signedBlock.blockHash,
-          s"Signed block has different block hash unsigned: $unsignedHash, signed: $signedHash."
-        )
-        BlockCreatorResult.created(signedBlock)
+            // This check is temporary until signing function will re-hash the block
+            val unsignedHash = PrettyPrinter.buildString(unsignedBlock.blockHash)
+            val signedHash   = PrettyPrinter.buildString(signedBlock.blockHash)
+            assert(
+              unsignedBlock.blockHash == signedBlock.blockHash,
+              s"Signed block has different block hash unsigned: $unsignedHash, signed: $signedHash."
+            )
+            BlockCreatorResult.created(signedBlock)
+          }
     }
   }
 }
