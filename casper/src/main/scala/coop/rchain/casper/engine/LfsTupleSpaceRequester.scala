@@ -263,9 +263,21 @@ object LfsTupleSpaceRequester {
       } yield createStream(st, requestQueue)
     }
 
-    Log[F].info(s"Loading tuple space state for ${states.mkString("; ")}") *>
-      states
-        .traverse(loadState)
-        .map(Stream.emits(_).flatten)
+    states
+      .traverse(loadState)
+      .map(
+        Stream
+          .emits(_)
+          .zipWithIndex
+          .evalMap {
+            case (s, i) =>
+              Log[F]
+                .info(
+                  s"Loading tuple space state for root ${states(i.toInt)} ($i of ${states.size})"
+                )
+                .as(s)
+          }
+          .flatten
+      )
   }
 }
