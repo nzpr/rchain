@@ -187,7 +187,7 @@ class NodeSyncing[F[_]
         TransportLayer[F].sendToBootstrap(
           StoreItemsMessageRequest(statePartPath, 0, pageSize).toProto
         ),
-      requestTimeout = 2.minutes,
+      requestTimeout = 10.seconds,
       RSpaceStateManager[F].importer,
       stateValidator
     )
@@ -207,7 +207,7 @@ class NodeSyncing[F[_]
                              incomingBlocksQueue.stream,
                              MultiParentCasper.deployLifespan,
                              hash => CommUtil[F].broadcastRequestForBlock(hash, 1.some),
-                             requestTimeout = 30.seconds,
+                             requestTimeout = 3.seconds,
                              BlockStore[F].contains(_),
                              BlockStore[F].getUnsafe,
                              BlockStore[F].put(_, _),
