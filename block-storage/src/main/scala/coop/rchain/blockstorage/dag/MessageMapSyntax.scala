@@ -26,7 +26,7 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       lowerBound: Set[M],
       lookup: (S, Long) => M,
       includePolicy: IncludePolicy
-  )(implicit sM: Show[M], sS: Show[S]): Set[M] = {
+  ) /*(implicit sM: Show[M], sS: Show[S])*/: Set[M] = {
 //    println(s"between ${upperBound.map(_.show)} and ${lowerBound.map(_.show)}")
     val upperAsSeen = View[S](
       upperBound

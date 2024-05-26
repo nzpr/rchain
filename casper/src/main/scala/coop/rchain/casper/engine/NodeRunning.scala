@@ -137,19 +137,6 @@ object NodeRunning {
   }
 
   /**
-    * Peer asks if this node has particular block
-    */
-  def handleHasBlockRequest[F[_]: Monad: TransportLayer: RPConfAsk](
-      peer: PeerNode,
-      hbr: HasBlockRequest
-  )(blockLookup: BlockHash => F[Boolean]): F[Unit] = {
-    val hasBlock  = blockLookup(hbr.hash)
-    val sendBlock = TransportLayer[F].sendToPeer(peer, HasBlockProto(hbr.hash))
-
-    hasBlock.ifM(sendBlock, ().pure[F])
-  }
-
-  /**
     * Peer asks for fork-choice tip
     */
   // TODO name for this message is misleading, as its a request for all tips, not just fork choice.
@@ -251,52 +238,33 @@ class NodeRunning[F[_]
       handleBlockHashMessage(peer, h)(checkBlockReceived)
 
     case b: BlockMessage =>
-      for {
-        _ <- validatorId match {
-              case None => ().pure[F]
-              case Some(id) =>
-                Log[F]
-                  .warn(
-                    s"There is another node $peer proposing using the same private key as you. " +
-                      s"Or did you restart your node?"
-                  )
-                  .whenA(b.sender == ByteString.copyFrom(id.publicKey.bytes))
-            }
-        _ <- checkBlockReceived(b.blockHash).ifM(
-              Log[F].debug(
-                s"Ignoring BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              ),
-              incomingBlocksQueue.trySend(b) *> Log[F].debug(
-                s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              )
-            )
-      } yield ()
+      incomingBlocksQueue.trySend(b) *> Log[F].debug(
+        s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
+          s"from ${peer.endpoint.host}"
+      )
 
     case br: BlockRequest => handleBlockRequest(peer, br)
 
     case hbr: HasBlockRequest =>
-      // Return blocks only available in the DAG (validated)
-      // - blocks can be returned from BlockStore if downloaded from latest in the DAG and not from tips
       for {
-        dag <- BlockDagStorage[F].getRepresentation
-        res <- handleHasBlockRequest(peer, hbr)(dag.contains(_).pure[F])
-      } yield res
-    case HasBlock(blockHash) =>
-      val processKnownBlock =
-        for {
-          blockNotValidated <- BlockReceiver.notValidated(blockHash)
-          _ <- (BlockStore[F].getUnsafe(blockHash) >>= incomingBlocksQueue.send)
-                .whenA(blockNotValidated)
-        } yield ()
-      val logProcess = Log[F].debug(
-        s"Incoming HasBlockMessage ${PrettyPrinter.buildString(blockHash)} from ${peer.endpoint.host}"
-      )
-      val requestUnknownBlock = BlockRetriever[F]
-        .admitHash(blockHash, peer.some, BlockRetriever.HasBlockMessageReceived)
+        has <- BlockStore[F].contains(hbr.hash)
+        _   <- TransportLayer[F].sendToPeer(peer, HasBlockProto(hbr.hash)).whenA(has)
+        _ <- Log[F].debug(s"Peer ${peer.endpoint.host} is asking for absent block ${{
+              PrettyPrinter.buildString(hbr.hash)
+            }}")
+      } yield ()
 
-      checkBlockReceived(blockHash).ifM(processKnownBlock, logProcess >> requestUnknownBlock.void)
+    case HasBlock(blockHash) =>
+      Log[F].debug(
+        s"Incoming HasBlockMessage ${PrettyPrinter.buildString(blockHash)} from ${peer.endpoint.host}"
+      ) *>
+        BlockStore[F].get1(blockHash) flatMap {
+        case Some(block) => incomingBlocksQueue.send(block).void
+        case None =>
+          BlockRetriever[F]
+            .admitHash(blockHash, peer.some, BlockRetriever.HasBlockMessageReceived)
+            .void
+      }
 
     case ForkChoiceTipRequest => handleForkChoiceTipRequest(peer)
 
