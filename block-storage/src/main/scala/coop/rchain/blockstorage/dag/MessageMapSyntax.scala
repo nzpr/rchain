@@ -27,7 +27,7 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       lookup: (S, Long) => M,
       includePolicy: IncludePolicy
   )(implicit sM: Show[M], sS: Show[S]): Set[M] = {
-    println(s"between ${upperBound.map(_.show)} and ${lowerBound.map(_.show)}")
+//    println(s"between ${upperBound.map(_.show)} and ${lowerBound.map(_.show)}")
     val upperAsSeen = View[S](
       upperBound
         .map(msgMap.getUnsafe)
@@ -50,7 +50,7 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       .iterator
       .flatMap {
         case (v, r) =>
-          println(s"${v.show} -> $r")
+//          println(s"${v.show} -> $r")
           r.map(_.toLong).map(v -> _)
       }
       .map(lookup.tupled)
@@ -86,7 +86,7 @@ final class MessageMapSyntaxOps[M, S](private val msgMap: Map[M, Message[M, S]])
       }
       .getOrElse(Set())
 
-    println(s"lowestFringe ${msgs.map(_.id.show.take(4))} => ${x.map(_.show.take(4))}")
+//    println(s"lowestFringe ${msgs.map(_.id.show.take(4))} => ${x.map(_.show.take(4))}")
     x.map { msgMap.getUnsafeShow }
   }
 
