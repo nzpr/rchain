@@ -2,7 +2,7 @@ package coop.rchain.store
 
 import cats.effect.Sync
 import cats.syntax.all._
-import cats.{Functor, Show}
+import cats.{Applicative, Functor, Show}
 
 trait KeyValueTypedStoreSyntax {
   implicit final def sharedSyntaxKeyValueTypedStore[F[_], K, V](
@@ -43,8 +43,10 @@ final class KeyValueTypedStoreOps[F[_], K, V](
 
   def contains(key: K)(implicit f: Functor[F]): F[Boolean] = store.contains(Seq(key)).map(_.head)
 
-  def getMissing(keys: Seq[K])(implicit f: Functor[F]): F[Seq[K]] =
-    store.contains(keys).map(_.zipWithIndex.collect { case (false, i) => keys(i) })
+  def getMissing(keys: Seq[K])(implicit f: Applicative[F]): F[Seq[K]] =
+    if (keys.isEmpty) keys.pure
+    else
+      store.contains(keys).map(_.zipWithIndex.collect { case (false, i) => keys(i) })
 
   def getOrElse(key: K, elseValue: V)(implicit f: Functor[F]): F[V] =
     get1(key).map(_.getOrElse(elseValue))
