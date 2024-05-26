@@ -24,7 +24,7 @@ class BlockReceiverStateSpec extends AnyFlatSpec with Matchers {
 
   "beginStored" should "return true if block is Requested" in {
     val (st, _)    = BlockReceiverState[MId].beginStored("A2")
-    val (newSt, _) = st.endStored("A2", List("A1" -> true))
+    val (newSt, _) = st.endStored("A2", Set("A1"))
 
     // Unseen parent A1 now have Requested status
 
@@ -36,16 +36,16 @@ class BlockReceiverStateSpec extends AnyFlatSpec with Matchers {
 
   "endStored" should "raise AssertionError if current state is not BeginStoreBlock" in {
     val (st, _)    = BlockReceiverState[MId].beginStored("A1")
-    val (newSt, _) = st.endStored("A1", List.empty)
+    val (newSt, _) = st.endStored("A1", Set.empty)
 
     // A1 is now an EndStoreBlock but should be a BeginStoreBlock
 
-    assertThrows[AssertionError](newSt.endStored("A1", List.empty))
+    assertThrows[AssertionError](newSt.endStored("A1", Set.empty))
   }
 
   "endStored" should "update state of ending block, state of stored blocks and child relations" in {
     val (st, _)                = BlockReceiverState[MId].beginStored("A2")
-    val (newSt, unseenParents) = st.endStored("A2", List("A1" -> true))
+    val (newSt, unseenParents) = st.endStored("A2", Set("A1"))
 
     // Status of A2 changed from BeginStoreBlock to EndStoreBlock
     st.receiveSt shouldNot contain("A2" -> EndStoreBlock)
@@ -74,7 +74,7 @@ class BlockReceiverStateSpec extends AnyFlatSpec with Matchers {
 
   "finished" should "return empty state if all blocks are processed" in {
     val (st1, _) = BlockReceiverState[MId].beginStored("A1")
-    val (st2, _) = st1.endStored("A1", List.empty)
+    val (st2, _) = st1.endStored("A1", Set.empty)
 
     // A1 has no dependencies and when it finishes it is removed from the state
     val (st3, _) = st2.finished("A1", Set.empty)
@@ -90,7 +90,7 @@ class BlockReceiverStateSpec extends AnyFlatSpec with Matchers {
     st1.receiveSt shouldBe Map("A2" -> BeginStoreBlock)
 
     // Finished storing of A2 with unseen parent A1
-    val (st2, a2UnseenParents) = st1.endStored("A2", List("A1" -> true))
+    val (st2, a2UnseenParents) = st1.endStored("A2", Set("A1"))
     st2.blocksSt shouldBe Map("A2"          -> Set("A1"))
     st2.receiveSt should contain.allOf("A2" -> EndStoreBlock, "A1" -> Requested)
     st2.childRelations shouldBe Map("A1"    -> Set("A2"))
@@ -101,7 +101,7 @@ class BlockReceiverStateSpec extends AnyFlatSpec with Matchers {
     st3.receiveSt should contain("A1" -> BeginStoreBlock)
 
     // Finished storing of A1 without parents
-    val (st4, a1UnseenParents) = st3.endStored("A1", List.empty)
+    val (st4, a1UnseenParents) = st3.endStored("A1", Set.empty)
     st4.blocksSt should contain("A1"  -> Set())
     st4.receiveSt should contain("A1" -> EndStoreBlock)
     a1UnseenParents shouldBe empty

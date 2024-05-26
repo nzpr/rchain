@@ -3,7 +3,7 @@ package coop.rchain.casper.dag
 import cats.effect.std.Semaphore
 import cats.effect.{Async, Ref, Sync}
 import cats.syntax.all._
-import cats.{Applicative, Monad, Show}
+import cats.{Monad, Show}
 import coop.rchain.blockstorage._
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.blockstorage.dag._
@@ -11,7 +11,7 @@ import coop.rchain.blockstorage.dag.codecs._
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.casper.dag.BlockDagKeyValueStorage._
 import coop.rchain.casper.merging.BlockIndex
-import coop.rchain.casper.protocol.{BlockMessage, DeployData, ProposeSlot}
+import coop.rchain.casper.protocol.{BlockMessage, DeployData}
 import coop.rchain.casper.{MultiParentCasper, PrettyPrinter}
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.metrics.Metrics.Source
@@ -148,9 +148,9 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
 
                 val shouldPrune = isNewFringe && (outsiders == Set(blockMetadata.sender))
 
-                println(
-                  s"outsiders ${(outsiders == Set(blockMetadata.sender))} newFringe $isNewFringe"
-                )
+//                println(
+//                  s"outsiders ${(outsiders == Set(blockMetadata.sender))} newFringe $isNewFringe"
+//                )
 
                 if (shouldPrune) {
                   val x = executeGC(
@@ -159,9 +159,9 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                     newDag.childMap,
                     (v, sN) => newDag.hashLookup.getUnsafe(v -> sN).head
                   )
-                  println(
-                    s"Garbage: ${x.map(_.toHexString.take(8))} blocks, new index size: ${BlockIndex.cache.size - x.size}"
-                  )
+//                  println(
+//                    s"Garbage: ${x.map(_.toHexString.take(8))} blocks, new index size: ${BlockIndex.cache.size - x.size}"
+//                  )
                   x
                 } else
                   Set.empty[BlockHash]
@@ -210,6 +210,9 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         // Delete garbage from other stores
         _ = garbage.toList.foreach(BlockIndex.cache.remove)
         _ <- lfsSetStore.delete(garbage.toList)
+        _ <- Log[F].info(
+              s"Pruning ${garbage.size} blocks, new LFS set size ${BlockIndex.cache.size}"
+            )
 
         _ <- removeExpiredFromPool(deployStore, dag).map(
               _.map((_, ())).foreach((expiredMap.update _).tupled)
