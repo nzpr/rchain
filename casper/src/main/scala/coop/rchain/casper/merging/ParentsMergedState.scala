@@ -1,6 +1,7 @@
 package coop.rchain.casper.merging
 
 import com.google.protobuf.ByteString
+import coop.rchain.casper.protocol.ProcessedSystemDeploy
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
 import coop.rchain.models.Validator.Validator
@@ -31,5 +32,6 @@ final case class ParentsMergedState(
     fringeRejectedDeploys: Set[ByteString],
     // Conflict scope state (non-finalized blocks)
     preStateHash: Blake2b256Hash,
-    rejectedDeploys: Set[ByteString]
+    rejectedDeploys: Set[ByteString],
+    fringeDeploys: Seq[ProcessedSystemDeploy]
 )

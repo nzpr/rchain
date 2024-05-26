@@ -24,6 +24,15 @@ trait WebApiAdminEndpoints
     docs = EndpointDocs().withDescription("Render dag in DOT format".some)
   )
 
+  val replay: Endpoint[String, String] = endpoint(
+    get(path / "replay" / blockHash),
+    ok(textResponse),
+    docs = EndpointDocs().withDescription("Render dag in DOT format".some)
+  )
+
   private lazy val dagDepth =
     segment[Int](name = "depth", docs = "Depth of the Dag to render".some)
+
+  private lazy val blockHash =
+    segment[Int](name = "block hash", docs = "Hash of a block".some)
 }

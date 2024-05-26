@@ -10,20 +10,21 @@ import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.blockstorage.dag.{BlockDagStorage, Finalizer}
 import coop.rchain.casper.merging.{BlockIndex, MergeScope, ParentsMergedState}
 import coop.rchain.casper.protocol._
-import coop.rchain.casper.rholang.{InterpreterUtil, RuntimeManager}
+import coop.rchain.casper.rholang.BlockRandomSeed.randomGenerator
+import coop.rchain.casper.rholang.sysdeploys.NewFringeDeploy
+import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeManager}
 import coop.rchain.casper.syntax._
+import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockHash => _, _}
-import coop.rchain.rspace.hashing.Blake2b256Hash
+import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.sdk.syntax.all.mapSyntax
 import coop.rchain.shared._
 import coop.rchain.shared.syntax.sharedSyntaxKeyValueTypedStore
-
-import scala.concurrent.duration.DurationInt
 
 final case class ParsingError(details: String)
 
@@ -53,7 +54,8 @@ object MultiParentCasper {
     } yield preState
 
   def getPreStateForParents[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log](
-      parentHashes: Set[BlockHash]
+      parentHashes: Set[BlockHash],
+      processedFringeDeploy: Option[ProcessedSystemDeploy] = None
   ): F[ParentsMergedState] =
     for {
       _ <- FatalError(
@@ -89,6 +91,10 @@ object MultiParentCasper {
                  else
                    RuntimeManager[F].computeBonds(prevFringeStateHash)
 
+      _ <- Log[F].info(
+            s"bondsMap ${bondsMap.map { case (k, v) => k.show -> v }} in ${prevFringeStateHash.toHexString}"
+          )
+
       finalizer         = Finalizer(dag.dagMessageState.msgMap)
       (_, newFringeOpt) = finalizer.calculateFinalization(parents, bondsMap)
       newFringeHashes   = newFringeOpt.map(_.map(_.id))
@@ -117,30 +123,91 @@ object MultiParentCasper {
                                          RuntimeManager[F].getHistoryRepo,
                                          BlockIndex.getBlockIndex[F](_)
                                        )
-                            } yield result
+                              // this rand does not mean anything here since it is used to only compute deploys,
+                              // which are empty
+                              rand = BlockRandomSeed.randomGenerator(
+                                "shardId",
+                                0,
+                                PublicKey.apply(ByteString.EMPTY),
+                                result._1
+                              )
+                              r <- processedFringeDeploy match {
+                                    case None =>
+                                      RuntimeManager[F].computeState(result._1.toByteString)(
+                                        Seq(),
+                                        Seq(NewFringeDeploy(result._1)),
+                                        rand,
+                                        BlockData(0, PublicKey.apply(ByteString.EMPTY), 0)
+                                      )
+                                    case Some(sd) => {
+                                      RuntimeManager[F]
+                                        .replayComputeState(result._1.toByteString)(
+                                          Seq(),
+                                          Seq(sd),
+                                          rand,
+                                          BlockData(0, PublicKey.apply(ByteString.EMPTY), 0),
+                                          parents.nonEmpty
+                                        )
+                                        .flatMap(
+                                          _.toOption
+                                            .liftTo[F](new Exception(s"NewFringe replay failed"))
+                                        )
+                                        .map(x => (x, Seq(), Seq(sd)))
+                                    }
+                                  }
+                            } yield (r._1.toBlake2b256Hash, result._2, result._3, r._3)
                           }
-                          (MergeScope.findSingleTip(fringe, dag) match {
-                            case Some(tip) =>
-                              for {
-                                state <- BlockStore[F]
-                                          .get1(tip)
-                                          .map(_.get.postStateHash.toBlake2b256Hash)
-                                rjFin <- fringe.toList
-                                          .traverse(BlockStore[F].get1)
-                                          .map(_.flatMap(_.get.rejectedDeploys))
-                              } yield state -> rjFin.toSet
-                            case _ => mergeFringe
-                          }).flatTap { result =>
-                            val (finalizedState, rejected) = result
-                            val finalizedStateStr =
-                              PrettyPrinter.buildString(finalizedState.toByteString)
-                            val rejectedDeploysStr = PrettyPrinter.buildString(rejected)
-                            val msgFinalized =
-                              s"New finalized fringe state: $finalizedStateStr, rejectedDeploys: $rejectedDeploysStr"
-                            Log[F].info(msgFinalized)
-                          }
+                          mergeFringe
+//                          (MergeScope.findSingleTip(fringe, dag) match {
+//                            case Some(tip) =>
+//                              for {
+//                                state <- BlockStore[F]
+//                                          .get1(tip)
+//                                          .map(_.get.postStateHash.toBlake2b256Hash)
+//                                rjFin <- fringe.toList
+//                                          .traverse(BlockStore[F].get1)
+//                                          .map(_.flatMap(_.get.rejectedDeploys))
+//                              } yield (state, rjFin.toSet, Set.empty[ByteString])
+//                            case _ => mergeFringe
+//                          })
+//                            .flatMap {
+//                              case (state, rejected) =>
+//                                // TODO this is not safe?
+//                                val rndSeed =
+//                                  BlockRandomSeed(
+//                                    "",
+//                                    0,
+//                                    coop.rchain.crypto.PublicKey(ByteString.EMPTY),
+//                                    state
+//                                  )
+//                                val rng = randomGenerator(rndSeed)
+//                                // TODO proper input. For now it should be fine
+//                                RuntimeManager[F]
+//                                  .computeState(state.toByteString)(
+//                                    Seq(),
+//                                    Seq(NewFringeDeploy(rng)),
+//                                    rng,
+//                                    BlockData(
+//                                      0,
+//                                      coop.rchain.crypto.PublicKey(ByteString.EMPTY),
+//                                      0
+//                                    )
+//                                  )
+//                                  .map { case (hash, _, _) => hash.toBlake2b256Hash -> rejected }
+//                            }
+                            .flatTap { result =>
+                              val (finalizedState, rejected, merged, _) = result
+                              val finalizedStateStr =
+                                PrettyPrinter.buildString(finalizedState.toByteString)
+                              val rejectedDeploysStr = PrettyPrinter.buildString(rejected)
+                              val mergedDeploysStr   = PrettyPrinter.buildString(merged)
+                              val msgFinalized =
+                                s"New finalized fringe state: $finalizedStateStr, rejectedDeploys: $rejectedDeploysStr, merged: $mergedDeploysStr"
+                              Log[F].info(msgFinalized)
+                            }
                         }
-      (fringeState, rejectedDeploys) = newFringeResult getOrElse (prevFringeState, prevFringeRejectedDeploys)
+      (fringeState, rejectedDeploys, accepted, fringeDeploys) = newFringeResult getOrElse (prevFringeState, prevFringeRejectedDeploys, Set
+        .empty[ByteString], Seq.empty[ProcessedSystemDeploy])
 
       maxHeight  = justifications.map(_.blockNum).maximumOption.getOrElse(-1L)
       maxSeqNums = justifications.map(m => (m.sender, m.seqNum)).toMap
@@ -153,7 +220,14 @@ object MultiParentCasper {
                                      BlockStore[F]
                                        .getUnsafe(parent)
                                        .map(_.postStateHash)
-                                       .map(x => (x.toBlake2b256Hash, Set.empty[ByteString]))
+                                       .map(
+                                         x =>
+                                           (
+                                             x.toBlake2b256Hash,
+                                             Set.empty[ByteString],
+                                             Set.empty[ByteString]
+                                           )
+                                       )
                                    case ps =>
                                      val (mScope, baseOpt) =
                                        MergeScope.fromDag(
@@ -178,7 +252,7 @@ object MultiParentCasper {
                                            )
                                      } yield r
                                  }
-      (preStateHash, csRejectedDeploys) = conflictScopeMergeResult
+      (preStateHash, csRejectedDeploys, _) = conflictScopeMergeResult
 
       // TODO: in validation (InterpreterUtil.validateBlockCheckpoint) this is logged also, check how to unify
       csRejectedDeploysStr = PrettyPrinter.buildString(csRejectedDeploys)
@@ -193,7 +267,8 @@ object MultiParentCasper {
       fringeBondsMap = bondsMap,
       fringeRejectedDeploys = rejectedDeploys,
       preStateHash = preStateHash,
-      rejectedDeploys = csRejectedDeploys
+      rejectedDeploys = csRejectedDeploys,
+      fringeDeploys = fringeDeploys
     )
 
   def validate[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log: Metrics: Span](

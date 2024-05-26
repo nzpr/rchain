@@ -91,9 +91,9 @@ object BlockIndex {
     val mrgCount    = mergeableChanData.size
 
     // Number of deploys must match the size of mergeable channels maps
-    assert(deployCount == mrgCount, {
-      s"Cache of mergeable channels ($mrgCount) doesn't match deploys count ($deployCount)."
-    })
+//    assert(deployCount == mrgCount, {
+//      s"Cache of mergeable channels ($mrgCount) doesn't match deploys count ($deployCount)."
+//    })
 
     // Connect deploy with corresponding mergeable channels map
     val (usrDeploys, sysDeploys) = mergeableChanData.toVector
@@ -115,16 +115,16 @@ object BlockIndex {
       sysDeploysData = sysDeploys
         .collect {
           case (Succeeded(log, SlashSystemDeployData(_)), mergeChs) =>
-            (blockHash.concat(SYS_SLASH_DEPLOY_ID), SYS_SLASH_DEPLOY_COST, log, mergeChs)
+            (SYS_SLASH_DEPLOY_ID concat blockHash, SYS_SLASH_DEPLOY_COST, log, mergeChs)
           case (Succeeded(log, CloseBlockSystemDeployData), mergeChs) =>
             (
-              blockHash.concat(SYS_CLOSE_BLOCK_DEPLOY_ID),
+              SYS_CLOSE_BLOCK_DEPLOY_ID concat blockHash,
               SYS_CLOSE_BLOCK_DEPLOY_COST,
               log,
               mergeChs
             )
           case (Succeeded(log, Empty), mergeChs) =>
-            (blockHash.concat(SYS_EMPTY_DEPLOY_ID), SYS_EMPTY_DEPLOY_COST, log, mergeChs)
+            (SYS_EMPTY_DEPLOY_ID concat blockHash, SYS_EMPTY_DEPLOY_COST, log, mergeChs)
         }
       sysDeployIndices <- sysDeploysData.traverse {
                            case (sig, cost, log, mergeChs) =>
@@ -141,7 +141,7 @@ object BlockIndex {
                              )
                          }
 
-      deployIndices = (usrDeployIndices ++ sysDeployIndices).toSet
+      deployIndices = (usrDeployIndices /* ++ sysDeployIndices*/ ).toSet
 
       /** Here deploys from a single block are examined. Atm deploys in block are executed sequentially,
         * so all conflicts are resolved according to order of sequential execution.

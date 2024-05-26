@@ -12,6 +12,7 @@ import coop.rchain.casper.merging.ParentsMergedState
 import coop.rchain.casper.protocol.{
   BlockMessage,
   DeployData,
+  NewFringeSystemDeployData,
   ProcessedDeploy,
   ProcessedSystemDeploy
 }
@@ -32,6 +33,7 @@ import coop.rchain.rholang.interpreter.errors.InterpreterError
 import coop.rchain.shared.{Log, LogSource}
 import retry.{retryingOnFailures, RetryPolicies, Sleep}
 import cats.effect.Temporal
+import coop.rchain.casper.rholang.sysdeploys.NewFringeDeploy
 import coop.rchain.sdk.dag.View
 
 import scala.concurrent.duration.FiniteDuration
@@ -65,7 +67,10 @@ object InterpreterUtil {
       _          <- Span[F].mark("before-compute-parents-post-state")
       parentsSet = parents.toSet
       preState <- if (parentsSet.nonEmpty)
-                   MultiParentCasper.getPreStateForParents(parents.toSet)
+                   MultiParentCasper.getPreStateForParents(
+                     parents.toSet,
+                     block.state.systemDeploys.find(_.systemDeploy == NewFringeSystemDeployData)
+                   )
                  else {
                    // Genesis block
                    val genesisPreStateHash = RuntimeManager.emptyStateHashFixed.toBlake2b256Hash
@@ -82,7 +87,8 @@ object InterpreterUtil {
                      maxSeqNums = Map[Validator, Long](block.sender -> 0L),
                      // TODO: validate genesis post-state hash
                      preStateHash = genesisPreStateHash,
-                     rejectedDeploys = Set()
+                     rejectedDeploys = Set(),
+                     fringeDeploys = Seq()
                    ).pure[F]
                  }
       blockStr          = PrettyPrinter.buildString(block, short = true)
@@ -95,7 +101,14 @@ object InterpreterUtil {
       rejectedDeployIds    = preState.fringeRejectedDeploys
       result <- {
         val incomingPreStateHash = block.preStateHash
-        if (incomingPreStateHash != computedPreStateHash) {
+        if (block.finStateHash != preState.fringeState.toByteString) {
+          Log[F]
+            .warn(
+              s"Computed final hash ${PrettyPrinter.buildString(preState.fringeState.toByteString)} " +
+                s"does not equal block's final hash ${PrettyPrinter.buildString(block.finStateHash)}"
+            )
+            .as(false.asRight[InvalidBlock])
+        } else if (incomingPreStateHash != computedPreStateHash) {
           //TODO at this point we may just as well terminate the replay, there's no way it will succeed.
           Log[F]
             .warn(
@@ -149,8 +162,11 @@ object InterpreterUtil {
     }
 
     Span[F].trace(ReplayBlockMetricsSource) {
-      val internalDeploys       = block.state.deploys
-      val internalSystemDeploys = block.state.systemDeploys
+      val internalDeploys = block.state.deploys
+      // NewFringeSystemDeployData should not be replayed here but when pre state is merged
+      val internalSystemDeploys =
+        block.state.systemDeploys.filterNot(_.systemDeploy == NewFringeSystemDeployData)
+
       for {
         _                  <- Span[F].mark("before-process-pre-state-hash")
         blockData          = BlockData.fromBlock(block)

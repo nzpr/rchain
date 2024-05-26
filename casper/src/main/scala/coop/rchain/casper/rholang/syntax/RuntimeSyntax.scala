@@ -13,6 +13,7 @@ import coop.rchain.casper.rholang.RuntimeDeployResult._
 import coop.rchain.casper.rholang.syntax.RuntimeSyntax._
 import coop.rchain.casper.rholang.sysdeploys.{
   CloseBlockDeploy,
+  NewFringeDeploy,
   PreChargeDeploy,
   RefundDeploy,
   SlashDeploy
@@ -366,7 +367,16 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
                               .playSucceeded(
                                 finalStateHash,
                                 eventLog,
-                                SystemDeployData.from(),
+                                SystemDeployData.closeBlock(),
+                                mcl,
+                                result
+                              )
+                          case NewFringeDeploy(_) =>
+                            SystemDeployResult
+                              .playSucceeded(
+                                finalStateHash,
+                                eventLog,
+                                SystemDeployData.newFringe(),
                                 mcl,
                                 result
                               )
@@ -610,7 +620,10 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
 
   private def toValidatorSeq(validatorsPar: Par): Seq[Validator] =
     validatorsPar.exprs.head.getESetBody.ps.map { validator =>
-      assert(validator.exprs.length == 1, "Validator in bonds map wasn't a single string.")
+      assert(
+        validator.exprs.length == 1,
+        s"Validator in bonds map wasn't a single string. $validator"
+      )
       validator.exprs.head.getGByteArray
     }.toList
 

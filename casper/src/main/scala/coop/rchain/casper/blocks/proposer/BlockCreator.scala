@@ -9,7 +9,8 @@ import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.casper.merging.ParentsMergedState
 import coop.rchain.casper.protocol.{ProcessedDeploy, ProcessedSystemDeploy, RholangState}
 import coop.rchain.casper.rholang.RuntimeManager.StateHash
-import coop.rchain.casper.rholang.sysdeploys.{CloseBlockDeploy, SlashDeploy}
+import coop.rchain.casper.rholang.sysdeploys._
+import coop.rchain.casper.rholang.types.SystemDeploy
 import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeManager}
 import coop.rchain.casper.syntax.casperSyntaxRuntimeManager
 import coop.rchain.casper.util.ProtoUtil
@@ -49,20 +50,29 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
     def propose: F[StateTransitionResult] = {
       val rand = BlockRandomSeed.randomGenerator(shardId, blockNum, creatorsPk, preStateHash)
 
-      val slashDeploys = {
-        // seeds from 0 to deploys.size are used in deploys execution, so system deploy seeds start from the next index
-        val slashSeeds =
-          (0 until toSlash.size).map(_ + deploys.size).map(i => rand.splitByte(i.toByte))
-        toSlash.toList.sorted.zip(slashSeeds).map(SlashDeploy.tupled)
-      }
+//      val slashDeploys = {
+//        // seeds from 0 to deploys.size are used in deploys execution, so system deploy seeds start from the next index
+//        val slashSeeds =
+//          (0 until toSlash.size).map(_ + deploys.size).map(i => rand.splitByte(i.toByte))
+//        toSlash.toList.sorted.zip(slashSeeds).map(SlashDeploy.tupled)
+//      }
 
       // Close block using rholang only if rholang state has been adjusted by a block
-      val closeDeployOpt = (slashDeploys.nonEmpty || deploys.nonEmpty).guard[Option].as {
-        val closeSeed = rand.splitByte((deploys.size + toSlash.size).toByte)
-        CloseBlockDeploy(closeSeed)
-      }
+//      val closeDeployOpt = (slashDeploys.nonEmpty || deploys.nonEmpty).guard[Option].as {
+//        val closeSeed = rand.splitByte((deploys.size + toSlash.size).toByte)
+//        CloseBlockDeploy(closeSeed)
+//      }
 
-      val sysDeploys = closeDeployOpt.map(slashDeploys :+ _).getOrElse(slashDeploys)
+//      val newFringeDeployOpt = changeEpoch.guard[Option].as {
+//        val seed = rand.splitByte((deploys.size + toSlash.size + 1).toByte)
+//        NewFringeDeploy(seed)
+//      }
+
+//      val sysDeploys = slashDeploys ++
+//        closeDeployOpt.map(List(_)).getOrElse(List.empty[SystemDeploy]) ++
+//        newFringeDeployOpt.map(List(_)).getOrElse(List.empty[SystemDeploy])
+
+      val sysDeploys = Seq() //slashDeploys
 
       BlockDagStorage[F].pooledDeploys
         .map(_.view.filterKeys(deploys.toSet).values.toSeq)
@@ -93,7 +103,10 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
       case None                                                            => BlockCreatorResult.noNewDeploys.pure
       case Some((postStateHash, processedDeploys, processedSystemDeploys)) =>
         // Create block and calculate block hash
-        val state = RholangState(processedDeploys.toList, processedSystemDeploys.toList)
+        val state = RholangState(
+          processedDeploys.toList,
+          processedSystemDeploys.toList ++ preState.fringeDeploys
+        )
         val view = View
           .compute[Validator, BlockMetadata](preState.justifications, _.sender, _.seqNum, _.view)
 

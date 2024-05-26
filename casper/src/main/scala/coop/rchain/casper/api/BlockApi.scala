@@ -74,6 +74,8 @@ trait BlockApi[F[_]] {
   def isFinalized(hash: String): F[ApiErr[Boolean]]
 
   def getLatestMessage: F[ApiErr[BlockMetadata]]
+
+  def replay(hash: String): F[ApiErr[Unit]]
 }
 
 object BlockApi {
@@ -92,7 +94,11 @@ object BlockApi {
   private def constructBlockInfo(block: BlockMessage): BlockInfo = {
     val lightBlockInfo = constructLightBlockInfo(block)
     val deploys        = block.state.deploys.map(_.toDeployInfo)
-    BlockInfo(blockInfo = lightBlockInfo, deploys = deploys)
+    BlockInfo(
+      blockInfo = lightBlockInfo,
+      deploys = deploys,
+      changedEpoch = block.state.systemDeploys.exists(_.systemDeploy == NewFringeSystemDeployData)
+    )
   }
 
   private def constructLightBlockInfo(block: BlockMessage): LightBlockInfo =
@@ -106,6 +112,7 @@ object BlockApi {
       version = block.version,
       blockNumber = block.blockNumber,
       preStateHash = PrettyPrinter.buildStringNoLimit(block.preStateHash),
+      finStateHash = PrettyPrinter.buildStringNoLimit(block.finStateHash),
       postStateHash = PrettyPrinter.buildStringNoLimit(block.postStateHash),
       bonds = block.bonds.map(bondToBondInfo).toList,
       blockSize = block.toProto.serializedSize.toString,
