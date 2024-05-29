@@ -521,30 +521,46 @@ in {
                                 commitCurrentEpochRewards, updatedRewardsCh, movePendingWithdrawCh,
                                 movePendingWithdrawer, addToBodsMap, newBondsMapCh
                             in {
+                              stdout!("newFringe") |
                               PoS!("getCurrentEpochRewards", *currentEpochRewardCh) |
                               for (@currentRewards <- currentEpochRewardCh) {
+                                stdout!("currentEpochRewardCh") |
+                                stdout!(currentRewards) |
                                 runMVar!(*stateCh, *stateProcessCh, *ackCh) |
                                 for (@state, stateUpdateCh <- stateProcessCh) {
                                   // 1. Calculate all the validator current epoch rewards based on active validator bonding proportion
                                   // 2. Accumulate `committedRewards` with the result of step 1
+                                  stdout!("state, stateUpdateCh") |
                                   commitCurrentEpochRewards!(state, currentRewards, *updatedRewardsCh) |
                                   for (@newCommittedState <- updatedRewardsCh) {
+                                    stdout!(newCommittedState) |
+                                    stdout!("newCommittedState") |
                                     // 3. Update `withdrawers` according to `allBonds` and `pendingWithdrawers`
                                     // when pendingWithdrawers is not empty, remove the validator in `allBonds`
                                     movePendingWithdrawer!(newCommittedState, *movePendingWithdrawCh) |
                                     for (@newMovedPendingState <- movePendingWithdrawCh){
+                                      stdout!("newMovedPendingState") |
+                                      stdout!(newMovedPendingState) |
                                       // 4. When the block number reaches the quantinue of `withdrawers` ,
                                       //  transfer the corresponding bonds+ rewards to the corresponding validator from posVault.
                                       // 5. update `pendingWithdrawers` to empty Map {}.
                                       removeQuarantinedWithdrawers!(0, newMovedPendingState, *removeQuarantinedCh) |
                                       for (@newRemovedQuantinueState <- removeQuarantinedCh) {
                                         // 6. Put requests for bonding into a bonds map TODO this is not really needed
+                                        stdout!("newRemovedQuantinueState") |
+                                        stdout!(newRemovedQuantinueState) |
                                         for (@bRequests <<- bStateCh) {
+                                          stdout!("bRequests") |
+                                          stdout!(bRequests) |
                                           addToBodsMap!(newRemovedQuantinueState, bRequests, *newBondsMapCh) |
                                           for (@newBondsMap <- newBondsMapCh) {
                                             // 7. Pick new `activeValidators`
+                                            stdout!("newBondsMap") |
+                                            stdout!(newBondsMap) |
                                             pickActiveValidators!(newBondsMap.get("allBonds").toList(), *newValidatorsCh) |
                                             for (@newValidators <- newValidatorsCh) {
+                                              stdout!("newValidators") |
+                                              stdout!(newValidators) |
                                               stateUpdateCh!(newBondsMap.set("activeValidators", newValidators), (true, Nil))
                                             }
                                           }
@@ -569,8 +585,10 @@ in {
                               } |
                               contract addToBodsMap(@state, @bondRequests, returnCh) = {
                                 new accumulate in {
+                                  stdout!("accumulate") |
                                   @ListOps!("fold", bondRequests.toList(), state, *accumulate, *returnCh) |
                                   contract accumulate(@(pk, bond), @s, resultCh) = {
+                                    stdout!("step") |
                                     if (s.get("allBonds").contains(pk)) {
                                         resultCh!(s)
                                     } else {

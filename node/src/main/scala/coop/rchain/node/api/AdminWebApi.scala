@@ -28,6 +28,6 @@ object AdminWebApi {
         .map(_.mkString)
 
     override def replay(hash: String): F[String] =
-      blockApi.replay(hash).flatMap(_.liftToBlockApiErr)
+      blockApi.replay(hash).flatMap(_.liftToBlockApiErr[F])
   }
 }

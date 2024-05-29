@@ -34,8 +34,10 @@ final case class NewFringeDeploy(initialRand: Blake2b512Random) extends SystemDe
       #  sysAuthToken(`sys:casper:authToken`),
       #  return(`sys:casper:return`), stdout(`rho:io:stdout`)
       #in {
+      #  stdout!("new Fringe query") |
       #  rl!(`rho:rchain:pos`, *poSCh) |
       #  for(@(_, Pos) <- poSCh) {
+      #    stdout!("new Fringe Pos got") |
       #    @Pos!("newFringe", *sysAuthToken, *return)
       #  }
       #}""".stripMargin('#')

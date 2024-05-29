@@ -75,7 +75,7 @@ trait BlockApi[F[_]] {
 
   def getLatestMessage: F[ApiErr[BlockMetadata]]
 
-  def replay(hash: String): F[ApiErr[Unit]]
+  def replay(hash: String): F[ApiErr[String]]
 }
 
 object BlockApi {

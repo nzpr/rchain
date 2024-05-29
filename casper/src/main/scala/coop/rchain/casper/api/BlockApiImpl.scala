@@ -691,17 +691,24 @@ class BlockApiImpl[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log
       .attempt
       .map(_.leftMap(_.getMessageSafe))
 
-  override def replay(hash: String): F[ApiErr[Unit]] =
+  override def replay(hash: String): F[ApiErr[String]] =
     for {
       blockHash <- hash.hexToByteString.liftTo(
                     new Exception(s"Invalid block hash base 16 encoding, $hash")
                   )
-      block <- BlockStore[F].getUnsafe(blockHash)
-      _ <- {
+      block <- BlockStore[F].get1(blockHash)
+      r <- {
         implicit val m: Metrics.MetricsNOP[F] = new Metrics.MetricsNOP()
-        InterpreterUtil.validateBlockCheckpoint(block)
+        block
+          .traverse(
+            InterpreterUtil
+              .validateBlockCheckpoint[F](_)
+              .map(_ => "OK")
+          )
+          .map(_.toRight(s"No block $blockHash in block store"))
+
       }
-    } yield ()
+    } yield r
 
   private def getDataAtParRaw(
       par: Par,

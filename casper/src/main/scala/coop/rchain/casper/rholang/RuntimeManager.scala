@@ -228,7 +228,8 @@ final case class RuntimeManagerImpl[F[_]: Async: Metrics: Span: Log: Parallel: C
 
   def computeBonds(hash: StateHash): F[Map[Validator, Long]] =
     (getBonds(hash), getActiveValidators(hash)).mapN {
-      case (all, active) => all.view.filterKeys(active.toSet).toMap
+      case (all, active) =>
+        all.view.filterKeys(active.toSet).toMap
     }
 
   // Executes deploy as user deploy with immediate rollback

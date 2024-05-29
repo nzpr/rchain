@@ -610,9 +610,11 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
 
   private def bondsQuerySource: String =
     s"""
-       # new return, rl(`rho:registry:lookup`), poSCh in {
+       # new return, rl(`rho:registry:lookup`), poSCh, stdout(`rho:io:stdout`) in {
+       #   stdout!("return") |
        #   rl!(`rho:rchain:pos`, *poSCh) |
        #   for(@(_, Pos) <- poSCh) {
+       #     stdout!("poSCh") |
        #     @Pos!("getBonds", *return)
        #   }
        # }
