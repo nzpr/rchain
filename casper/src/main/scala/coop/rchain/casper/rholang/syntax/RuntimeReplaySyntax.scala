@@ -127,6 +127,9 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
     val sysDeploys = {
       if (systemDeploys.size == 1 && systemDeploys.head.systemDeploy == NewFringeSystemDeployData) {
         val rnd = NewFringeDeploy.rand(startHash.toBlake2b256Hash)
+        println(
+          s"Replaying rand ${(Blake2b256Hash.fromByteArray(rnd.copy().next()))}"
+        )
         replaySystemDeploy(systemDeploys.head, rnd).map(_.map(Vector(_)))
       } else
         (systemDeploys, Vector[NumberChannelsEndVal](), terms.length).tailRecM {
@@ -310,7 +313,9 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
           }
         ).map(_._1)
       case NewFringeSystemDeployData =>
-        println(s"Replaying NewFringeSystemDeployData")
+        println(
+          s"Replaying NewFringeSystemDeployData rand ${(Blake2b256Hash.fromByteArray(rand.copy().next()))}"
+        )
         val newFringeDeploy = NewFringeDeploy(rand)
         rigWithCheck(
           processedSysDeploy,

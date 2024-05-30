@@ -219,7 +219,7 @@ object MergeScope {
       overallChanges                    = s"${allChanges.datumsChanges.size} D, ${allChanges.kontChanges.size} K, ${allChanges.consumeChannelsToJoinSerializedMap.size} J"
       logStr = s"Merging done. Changes: $overallChanges; " +
         s"trie actions (${trieActions.size}) computed in ${computeActionsTime}; " +
-        s"actions applied in ${applyActionsTime}"
+        s"actions applied in ${applyActionsTime}. ${baseState} => ${newState}"
       _ <- Log[F].debug(logStr)
     } yield newState
 }

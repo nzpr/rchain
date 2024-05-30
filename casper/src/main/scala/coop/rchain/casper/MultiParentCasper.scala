@@ -85,6 +85,10 @@ object MultiParentCasper {
       prevFringeState           = fringeRecord.stateHash
       prevFringeRejectedDeploys = fringeRecord.rejectedDeploys
       prevFringeStateHash       = prevFringeState.toByteString
+
+      _ = println(
+        s"prevFringeHashes ${prevFringeHashes.map(_.show.take(8))} prevFringeState: ${prevFringeState}"
+      )
       // TODO: for empty fringe bonds map should be loaded from bonds file (if validated in replay)
       bondsMap <- if (prevFringe.isEmpty)
                    justifications.head.bondsMap.pure[F]
@@ -123,6 +127,20 @@ object MultiParentCasper {
                                          RuntimeManager[F].getHistoryRepo,
                                          BlockIndex.getBlockIndex[F](_)
                                        )
+//                              _ = println(
+//                                s"baseOpt $baseOpt merging into ${baseStateOpt
+//                                  .getOrElse(prevFringeState)} (${prevFringeHashes})"
+//                              )
+//                              _ = println(dag.fringeStates)
+//                              _ = println(s"newFringe ${fringe.map(_.toHexString.take(8))}")
+//                              _ = println(s"baseStateOpt $baseStateOpt")
+//                              _ = println(
+//                                s"finalScope ${mScope.finalScope.map(_.toHexString.take(8))}"
+//                              )
+//                              _ = println(
+//                                s"conflictScope ${mScope.conflictScope.map(_.toHexString.take(8))}"
+//                              )
+//                              _ = println(s"merge $result")
                               // this rand does not mean anything here since it is used to only compute deploys,
                               // which are empty
                               rand = BlockRandomSeed.randomGenerator(
@@ -202,7 +220,8 @@ object MultiParentCasper {
                               val rejectedDeploysStr = PrettyPrinter.buildString(rejected)
                               val mergedDeploysStr   = PrettyPrinter.buildString(merged)
                               val msgFinalized =
-                                s"New finalized fringe state: $finalizedStateStr, rejectedDeploys: $rejectedDeploysStr, merged: $mergedDeploysStr"
+                                s"New finalized fringe state: $finalizedStateStr, old ${PrettyPrinter
+                                  .buildString(prevFringeStateHash)} rejectedDeploys: $rejectedDeploysStr, merged: $mergedDeploysStr"
                               Log[F].info(msgFinalized)
                             }
                         }
