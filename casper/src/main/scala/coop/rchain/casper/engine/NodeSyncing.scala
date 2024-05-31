@@ -147,7 +147,8 @@ class NodeSyncing[F[_]
         // Download approved state and all related blocks
         _ <- requestApprovedState(
               msg.tips.toSet,
-              msg.lowerBound.map(x => x.validator -> x.seqNum).toMap
+              msg.lowerBound.map(x => x.validator -> x.seqNum).toMap,
+              msg.finalStateHash.toBlake2b256Hash
             )
 
         // Approved block is saved after the whole state is received,
@@ -197,7 +198,8 @@ class NodeSyncing[F[_]
 
   def requestApprovedState(
       lms: Set[BlockHash],
-      edge: Map[Validator, Long]
+      edge: Map[Validator, Long],
+      finalStateHash: Blake2b256Hash
   ): F[Unit] =
     for {
       // Request all blocks for Last Finalized State
@@ -223,13 +225,13 @@ class NodeSyncing[F[_]
             .evalMap(
               BlockStore[F]
                 .getUnsafe(_)
-                .map(b => List(b.finStateHash, b.preStateHash, b.postStateHash))
+                .map(b => List(b.preStateHash, b.postStateHash))
             )
             .flatMap(fs2.Stream.emits)
             .map(_.toBlake2b256Hash)
             .compile
             .to(Set)
-            .flatMap(x => requestStates(x.toList)) *>
+            .flatMap(x => requestStates(finalStateHash +: x.toList)) *>
           Log[F].info(s"States for LFS received and imported.")
       }
       _ <- blockRequestAddDagStream.compile.drain
