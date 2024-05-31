@@ -222,11 +222,14 @@ class NodeSyncing[F[_]
           Log[F].info(s"Blocks for LFS received and added to the state.") *>
           fs2.Stream
             .emits(st.heightMap.values.flatten.toList.distinct)
-            .evalMap(
-              BlockStore[F]
-                .getUnsafe(_)
-                .map(b => List(b.preStateHash, b.postStateHash))
-            )
+            .evalMap(BlockStore[F].getUnsafe)
+            // filter out blocks that had to be pulled just to have data to protect from replay attack
+            // (deployLifespan related)
+            .collect {
+              case b
+                  if (b.seqNum >= (edge.getUnsafe(b.sender) + MultiParentCasper.deployLifespan)) =>
+                List(b.preStateHash, b.postStateHash)
+            }
             .flatMap(fs2.Stream.emits)
             .map(_.toBlake2b256Hash)
             .compile

@@ -578,7 +578,7 @@ object BootstrapDataMessage {
   implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
     override def show(t: BootstrapDataMessage): String =
       s"tips: ${t.tips.map(_.toHexString.take(8))}, lowerBound: ${t.lowerBound
-        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}, finalStateHash: ${t.finalStateHash}"
+        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}, finalStateHash: ${t.finalStateHash.toBlake2b256Hash}"
   }
 }
 
