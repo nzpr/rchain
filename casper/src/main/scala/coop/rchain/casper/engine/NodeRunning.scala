@@ -226,6 +226,7 @@ class NodeRunning[F[_]
     deployLifespan: Long
 ) {
   import NodeRunning._
+  import coop.rchain.models.BlockHash._
 
   /**
     * Check if block is stored in the BlockStore
@@ -283,7 +284,16 @@ class NodeRunning[F[_]
           if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
         }
 
-        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound)
+        finalStateHash = dag.fringeStates
+          .getUnsafe(
+            dag.dagMessageState.msgMap
+              .lowestFringe(dag.dagMessageState.latestMsgs)
+              .map(_.id)
+          )
+          .stateHash
+          .toByteString
+
+        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound, finalStateHash)
 
         _ <- handleBootstrapDataRequest(peer, bootstrapDataMsg)
 

@@ -27,6 +27,7 @@ message BootstrapDataProto {
   option (scalapb.message).extends = "CasperMessageProto";
   repeated bytes tips = 1;
   repeated ProposeSlotProto lowerBound = 2;
+  bytes finalStateHash = 3;
 }
 
 message ProposeSlotProto {

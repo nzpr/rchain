@@ -555,7 +555,8 @@ object ProposeSlot {
 
 final case class BootstrapDataMessage(
     tips: Seq[BlockHash],
-    lowerBound: Set[ProposeSlot]
+    lowerBound: Set[ProposeSlot],
+    finalStateHash: ByteString
 ) extends CasperMessage {
   override def toProto: BootstrapDataProto = BootstrapDataMessage.toProto(this)
 }
@@ -564,18 +565,20 @@ object BootstrapDataMessage {
   def from(x: BootstrapDataProto): BootstrapDataMessage =
     BootstrapDataMessage(
       x.tips,
-      x.lowerBound.map(ProposeSlot.from).toSet
+      x.lowerBound.map(ProposeSlot.from).toSet,
+      x.finalStateHash
     )
   def toProto(x: BootstrapDataMessage): BootstrapDataProto =
     BootstrapDataProto(
       x.tips,
-      x.lowerBound.map(ProposeSlot.toProto).toSeq
+      x.lowerBound.map(ProposeSlot.toProto).toSeq,
+      x.finalStateHash
     )
 
   implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
     override def show(t: BootstrapDataMessage): String =
       s"tips: ${t.tips.map(_.toHexString.take(8))}, lowerBound: ${t.lowerBound
-        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}"
+        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}, finalStateHash: ${t.finalStateHash.toBlake2b256Hash}"
   }
 }
 
