@@ -1,7 +1,7 @@
 package coop.rchain
 
 import coop.rchain.fs2.Fs2StreamSyntax
-import coop.rchain.sdk.primitive.MapSyntax
+import coop.rchain.sdk.primitive.syntax._
 import coop.rchain.store.{KeyValueStoreManagerSyntax, KeyValueStoreSyntax, KeyValueTypedStoreSyntax}
 
 package object shared {

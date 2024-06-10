@@ -1,6 +1,6 @@
 package coop.rchain.sdk
 
-import coop.rchain.sdk.primitive._
+import coop.rchain.sdk.primitive.syntax._
 
 // Definitions of syntax pattern follows cats library as an example
 // https://github.com/typelevel/cats/blob/8d4cf2879df/core/src/main/scala/cats/syntax/all.scala

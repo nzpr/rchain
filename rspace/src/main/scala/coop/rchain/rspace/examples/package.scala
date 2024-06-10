@@ -1,6 +1,6 @@
 package coop.rchain.rspace
 
-import coop.rchain.sdk.syntax.all._
+import coop.rchain.sdk.syntax.primitive.sdkSyntaxTry
 import coop.rchain.shared.Serialize
 import scodec.bits.ByteVector
 
