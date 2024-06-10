@@ -16,7 +16,7 @@ import coop.rchain.shared.syntax._
 import fs2.Stream
 import fs2.concurrent.SignallingRef
 import io.grpc.netty._
-import io.grpc.{CallOptions, ManagedChannel, Metadata}
+import io.grpc.{CallOptions, Channel, ManagedChannel, Metadata}
 import io.netty.handler.ssl.SslContext
 
 import java.io.ByteArrayInputStream
@@ -197,5 +197,9 @@ class GrpcTransportClient[F[_]: Async: Log: Metrics](
       case Left(error) =>
         Log[F].error(s"Error while streaming packet $key to $peer: ${error.message}")
     }
+  }
+
+  override def channel(peer: PeerNode): Resource[F, Channel] = Dispatcher.parallel[F].flatMap { d =>
+    Resource.liftK(getChannel(peer, d)).map(_.grpcTransport)
   }
 }
