@@ -33,7 +33,7 @@ object View {
 
   def diff[S](postfix: View[S], prefix: View[S], includePolicy: IncludePolicy): View[S] = {
     val postfixOnly = postfix.seen -- prefix.seen.keys
-    val newSeen = postfix.seen.foldLeft(prefix.seen ++ postfixOnly) {
+    val newSeen = postfixOnly ++ postfix.seen.foldLeft(prefix.seen) {
       case (acc, (sender, range2)) =>
         acc.get(sender) match {
           case None =>
