@@ -43,7 +43,7 @@ object COMM {
 
 sealed trait IOEvent extends Event
 
-final case class Produce private (
+final case class Produce(
     channelsHash: Blake2b256Hash,
     hash: Blake2b256Hash,
     persistent: Boolean
@@ -84,7 +84,7 @@ object Produce {
     new Produce(channelsHash, hash, persistent)
 }
 
-final case class Consume private (
+final case class Consume(
     channelsHashes: Seq[Blake2b256Hash],
     hash: Blake2b256Hash,
     persistent: Boolean

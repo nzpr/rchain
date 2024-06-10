@@ -13,15 +13,19 @@ Global / conflictManager := ConflictManager.strict
 //resolve all version conflicts explicitly
 Global / dependencyOverrides := Dependencies.overrides
 
+lazy val scala2Version = "2.13.10"
+
 lazy val projectSettings = Seq(
   organization := "coop.rchain",
-  scalaVersion := "2.13.10",
+  scalaVersion := scala2Version,
   version := "0.1.0-SNAPSHOT",
   resolvers ++=
     Resolver.sonatypeOssRepos("releases") ++
       Resolver.sonatypeOssRepos("snapshots") ++
       Seq("jitpack" at "https://jitpack.io"),
   wartremoverExcluded += sourceManaged.value,
+  // Enables Scala2 project to depend on Scala3 projects
+  scalacOptions += "-Ytasty-reader",
   Compile / compile / wartremoverErrors ++= Warts.allBut(
     // those we want
     Wart.DefaultArguments,
@@ -129,7 +133,8 @@ lazy val sdk = (project in file("sdk"))
     libraryDependencies ++= commonDependencies ++ Seq(
       catsCore,
       catsEffect,
-      fs2Core
+      fs2Core,
+      jaxb
     )
   )
 
@@ -194,7 +199,8 @@ lazy val casper = (project in file("casper"))
     crypto,
     models % "compile->compile;test->test",
     rspace,
-    rholang % "compile->compile;test->test"
+    rholang % "compile->compile;test->test",
+    macros
   )
 
 lazy val comm = (project in file("comm"))
@@ -220,7 +226,8 @@ lazy val comm = (project in file("comm"))
       weupnp,
       catsCore,
       catsMtl,
-      guava
+      guava,
+      apacheCommonsIO
     )
   )
   .dependsOn(shared % "compile->compile;test->test", crypto, models)
@@ -424,7 +431,7 @@ lazy val node = (project in file("node"))
       "openssl"
     )
   )
-  .dependsOn(casper % "compile->compile;test->test", comm, crypto, rholang)
+  .dependsOn(casper % "compile->compile;test->test", comm, crypto, rholang, macros)
 
 lazy val regex = (project in file("regex"))
   .settings(commonSettings: _*)
@@ -572,6 +579,15 @@ lazy val secp256k1 = (project in file("secp256k1"))
     // NOTE: this is not called on `compile` but when tests are called or on assembly
     Compile / resourceGenerators += pullNative.taskValue
   )
+
+// Macro implementation should be compiled before macro application
+// https://stackoverflow.com/questions/75847326/macro-implementation-not-found-scala-2-13-3
+lazy val macros = (project in file("macros"))
+  .settings(commonSettings *)
+  .settings(
+    libraryDependencies ++= Seq(scalaReflect(scala2Version), kindProjector, magnolia1) ++ protobufLibDependencies
+  )
+  .dependsOn(sdk)
 
 lazy val rchain = (project in file("."))
   .settings(commonSettings: _*)

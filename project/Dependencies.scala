@@ -145,8 +145,8 @@ object Dependencies {
     "io.grpc" % "grpc-core" % scalapb.compiler.Version.grpcJavaVersion
   )
 
-  private val kindProjector = compilerPlugin(
-    "org.typelevel" %% "kind-projector" % "0.13.2" cross CrossVersion.full
+  val kindProjector = compilerPlugin(
+    "org.typelevel" %% "kind-projector" % "0.13.3" cross CrossVersion.full
   )
 
   private val testing =
@@ -185,4 +185,13 @@ object Dependencies {
 
   val commonDependencies: Seq[ModuleID] =
     logging ++ testing :+ kindProjector :+ scalaCompat :+ sourcecode
+
+  // Reflection
+  def scalaReflect(scalaVersion: String): ModuleID =
+    "org.scala-lang" % "scala-reflect" % scalaVersion
+
+  // Typeclass derivation
+  val magnolia1 = "com.softwaremill.magnolia1_2" %% "magnolia" % "1.1.10"
+
+  val apacheCommonsIO = "commons-io" % "commons-io" % "2.15.1"
 }
