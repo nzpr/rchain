@@ -16,49 +16,49 @@ final case class DagMessageState[M: Ordering, S: Ordering](
     msgMap: Map[M, Message[M, S]]
 ) {
 
-  /**
-    * Creates a new message, generates id (hash) and finalization fringe
-    */
-  def createMessage(
-      id: M,
-      height: Long,
-      sender: S,
-      senderSeq: Long,
-      finBondsMap: Map[S, Long],
-      justifications: Set[Message[M, S]]
-  ): Message[M, S] = {
-    // Calculate next fringe or continue with parent
-    val finalizer                    = Finalizer(msgMap)
-    val (parentFringe, newFringeOpt) = finalizer.calculateFinalization(justifications, finBondsMap)
-
-    val newFringe    = newFringeOpt.getOrElse(parentFringe)
-    val newFringeIds = newFringe.map(_.id)
-
-    // Seen messages are all seen from justifications combined
-    val newSeen = View.compute[S, Message[M, S]](justifications, _.sender, _.senderSeq, _.seen)
-
-    // Create message, an immutable object with all fields calculated
-    val justificationKeys = justifications.map(_.id)
-    val newMsg =
-      Message(
-        id,
-        height,
-        sender,
-        senderSeq,
-        finBondsMap,
-        justificationKeys,
-        fringe = newFringeIds,
-        seen = newSeen
-      )
-
-    /* Debug log */
-    // val fringeStr = newFringeOpt.map(ms => s"+ ${showMsgs(ms)}").getOrElse("")
-    // println(s"${newMsg.id} $fringeStr")
-    debugLogMessage(finalizer, newMsg, justifications, parentFringe, newFringeOpt)
-    /* End Debug log */
-
-    newMsg
-  }
+//  /**
+//    * Creates a new message, generates id (hash) and finalization fringe
+//    */
+//  def createMessage(
+//      id: M,
+//      height: Long,
+//      sender: S,
+//      senderSeq: Long,
+//      finBondsMap: Map[S, Long],
+//      justifications: Set[Message[M, S]]
+//  ): Message[M, S] = {
+//    // Calculate next fringe or continue with parent
+//    val finalizer                    = Finalizer(msgMap)
+//    val (parentFringe, newFringeOpt) = finalizer.calculateFinalization(justifications, finBondsMap)
+//
+//    val newFringe    = newFringeOpt.getOrElse(parentFringe)
+//    val newFringeIds = newFringe.map(_.id)
+//
+//    // Seen messages are all seen from justifications combined
+//    val newSeen = View.compute[S, Message[M, S]](justifications, _.sender, _.senderSeq, _.seen)
+//
+//    // Create message, an immutable object with all fields calculated
+//    val justificationKeys = justifications.map(_.id)
+//    val newMsg =
+//      Message(
+//        id,
+//        height,
+//        sender,
+//        senderSeq,
+//        finBondsMap,
+//        justificationKeys,
+//        fringe = newFringeIds,
+//        seen = newSeen
+//      )
+//
+//    /* Debug log */
+//    // val fringeStr = newFringeOpt.map(ms => s"+ ${showMsgs(ms)}").getOrElse("")
+//    // println(s"${newMsg.id} $fringeStr")
+//    debugLogMessage(finalizer, newMsg, justifications, parentFringe, newFringeOpt)
+//    /* End Debug log */
+//
+//    newMsg
+//  }
 
   /**
     * Inserts a message to sender's state
@@ -89,37 +89,37 @@ final case class DagMessageState[M: Ordering, S: Ordering](
       copy(latestMsgs = newLatestMsgs, msgMap = newMsgMap)
     }
 
-  /**
-    * Creates a new message and adds it to sender state
-    */
-  def createMsgAndUpdateSender(
-      creator: S,
-      genMsgId: (S, Long) => M
-  ): (DagMessageState[M, S], Message[M, S]) = {
-    val maxHeight      = latestMsgs.map(_.height).max
-    val newHeight      = maxHeight + 1
-    val seqNum         = latestMsgs.find(_.sender == creator).map(_.senderSeq).getOrElse(0L)
-    val newSeqNum      = seqNum + 1
-    val justifications = latestMsgs
-    // Bonds map taken from any latest message (assumes no epoch change happen)
-    val bondsMap = latestMsgs.head.bondsMap
-
-    // Generate message ID (to be updated with real block hash)
-    val msgId = genMsgId(creator, newHeight)
-
-    // Create a new message
-    val newMsg = createMessage(
-      id = msgId,
-      height = newHeight,
-      sender = creator,
-      senderSeq = newSeqNum,
-      bondsMap,
-      justifications
-    )
-
-    // Insert message to self state
-    (insertMsg(newMsg), newMsg)
-  }
+//  /**
+//    * Creates a new message and adds it to sender state
+//    */
+//  def createMsgAndUpdateSender(
+//      creator: S,
+//      genMsgId: (S, Long) => M
+//  ): (DagMessageState[M, S], Message[M, S]) = {
+//    val maxHeight      = latestMsgs.map(_.height).max
+//    val newHeight      = maxHeight + 1
+//    val seqNum         = latestMsgs.find(_.sender == creator).map(_.senderSeq).getOrElse(0L)
+//    val newSeqNum      = seqNum + 1
+//    val justifications = latestMsgs
+//    // Bonds map taken from any latest message (assumes no epoch change happen)
+//    val bondsMap = latestMsgs.head.bondsMap
+//
+//    // Generate message ID (to be updated with real block hash)
+//    val msgId = genMsgId(creator, newHeight)
+//
+//    // Create a new message
+//    val newMsg = createMessage(
+//      id = msgId,
+//      height = newHeight,
+//      sender = creator,
+//      senderSeq = newSeqNum,
+//      bondsMap,
+//      justifications
+//    )
+//
+//    // Insert message to self state
+//    (insertMsg(newMsg), newMsg)
+//  }
 
   /**
     * Convenient method to get latest fringe by using latest messages as parents
