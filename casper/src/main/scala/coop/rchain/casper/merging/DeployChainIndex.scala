@@ -20,7 +20,7 @@ final case class DeployChainIndex(
     postStateHash: Blake2b256Hash,
     eventLogIndex: EventLogIndex,
     stateChanges: StateChange,
-    private val hashCodeVal: Int
+    hashCodeVal: Int
 ) {
   // equals and hash overrides are required to make conflict resolution faster, particularly rejection options calculation
   override def equals(obj: Any): Boolean = obj match {

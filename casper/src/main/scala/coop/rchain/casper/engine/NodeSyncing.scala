@@ -1,29 +1,24 @@
 package coop.rchain.casper.engine
 
-import cats.effect.Async
+import cats.effect.kernel.Sync
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all._
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.approvedStore.ApprovedStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
+import coop.rchain.casper.merging.{BlockIndex, MergeScope}
 import coop.rchain.casper.protocol.{CommUtil, _}
 import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.syntax._
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
+import coop.rchain.comm.rpc.{BlockIndexEndpoint, RpcCall, RpcMethod, Serialize}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
-import coop.rchain.rspace.state.{RSpaceImporter, RSpaceStateManager}
-import coop.rchain.shared._
-import coop.rchain.shared.syntax._
-import fs2.concurrent.Channel
-
-import scala.collection.immutable.SortedMap
-import scala.concurrent.duration._
-import cats.effect.{Deferred, Ref, Temporal}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.rholang.interpreter.merging.RholangMergingLogic.{
@@ -32,8 +27,14 @@ import coop.rchain.rholang.interpreter.merging.RholangMergingLogic.{
   NumberChannel
 }
 import coop.rchain.rspace.hashing.Blake2b256Hash
-import coop.rchain.sdk.dag.View
+import coop.rchain.rspace.state.{RSpaceImporter, RSpaceStateManager}
+import coop.rchain.shared.Log
+import coop.rchain.shared.syntax._
+import fs2.concurrent.Channel
 import scodec.bits.ByteVector
+
+import scala.collection.immutable.SortedMap
+import scala.concurrent.duration._
 
 object NodeSyncing {
 
@@ -196,6 +197,37 @@ class NodeSyncing[F[_]
     Log[F].info(s"Loading ${states.size} states") *> stream.flatMap(_.compile.drain)
   }
 
+  private def requestIndices(indices: List[BlockHash]): F[Unit] = {
+    import coop.rchain.casper.serialize.auto._
+    import coop.rchain.macros.serialize.auto._
+
+    val method  = RpcMethod.apply[BlockHash, BlockIndex](BlockIndexEndpoint)
+    val rpcCall = RpcCall.apply[F, BlockHash, BlockIndex]
+
+    val chRes = for {
+      maybeBootstrap <- Resource.liftK(RPConfAsk[F].reader(_.bootstrap))
+      bootstrap      = maybeBootstrap.get
+      ch <- TransportLayer[F].channel(
+             bootstrap.copy(endpoint = bootstrap.endpoint.copy(tcpPort = 40406))
+           )
+    } yield ch
+
+    Log[F].info(s"Requesting block indices") *>
+      chRes.use { ch =>
+        indices.foldLeftM(0) { (acc, h) =>
+          rpcCall
+            .invoke(method, h, ch)
+            .flatTap { i =>
+              Log[F].info(
+                s"Fetched block index for ${i.blockHash.toHexString.take(8)} ($acc/${indices.size - 1})"
+              ) *>
+                Sync[F].delay(BlockIndex.cache += (i.blockHash -> i))
+            }
+            .as(acc + 1)
+        }
+      }.void
+  }
+
   def requestApprovedState(
       lms: Set[BlockHash],
       edge: Map[Validator, Long],
@@ -227,7 +259,9 @@ class NodeSyncing[F[_]
           // (deployLifespan related)
           .collect { case b if b.seqNum >= edge.getUnsafe(b.sender) => b.blockHash }
           .compile
-          .toList *> Log[F].info(s"States for LFS received and imported.")
+          .toList
+          .flatMap(requestIndices) *>
+          Log[F].info(s"Blocks, states and indices for LFS are received and imported.")
 
       }
       _ <- blockRequestAddDagStream.compile.drain
