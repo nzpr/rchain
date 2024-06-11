@@ -278,9 +278,7 @@ class NodeRunning[F[_]
         lowerBound = {
           val x = BlockDagKeyValueStorage
             .dbPruneFringe(dag.dagMessageState, dag.childMap)
-            // TODO this "- deployLifespan" is because double space of search for double spend might
-            //  be bigger then required to restore the state. Make it proper to download minimum.
-            .map(x => ProposeSlot(x.sender, x.senderSeq - deployLifespan))
+            .map(x => ProposeSlot(x.sender, x.senderSeq))
           if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
         }
 

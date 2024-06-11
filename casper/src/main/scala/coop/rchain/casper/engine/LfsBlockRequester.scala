@@ -14,6 +14,7 @@ import fs2.concurrent.Channel
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration._
 import cats.effect.{Ref, Temporal}
+import coop.rchain.casper.MultiParentCasper.deployLifespan
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 
@@ -205,7 +206,9 @@ object LfsBlockRequester {
                          // Update dependencies for requesting
                          val requestDependencies = st.update(_.add(block.justifications.toSet))
 
-                         val old = edge.getUnsafe(block.sender) >= block.seqNum
+                         // TODO this "- deployLifespan" is because double space of search for double spend might
+                         //  be bigger then required to restore the state. Make it proper to download minimum.
+                         val old = edge.getUnsafe(block.sender) - deployLifespan >= block.seqNum
 
                          // Accept block if it's requested and satisfy conditions
                          // - received one of latest messages
