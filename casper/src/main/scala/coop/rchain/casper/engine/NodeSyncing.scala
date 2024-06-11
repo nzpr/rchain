@@ -148,7 +148,7 @@ class NodeSyncing[F[_]
         _ <- requestApprovedState(
               msg.tips.toSet,
               msg.lowerBound.map(x => x.validator -> x.seqNum).toMap,
-              msg.finalStateHash.toBlake2b256Hash
+              msg.finalStateHashes.map(_.toBlake2b256Hash)
             )
 
         // Approved block is saved after the whole state is received,
@@ -199,7 +199,7 @@ class NodeSyncing[F[_]
   def requestApprovedState(
       lms: Set[BlockHash],
       edge: Map[Validator, Long],
-      finalStateHash: Blake2b256Hash
+      finalStateHashes: List[Blake2b256Hash]
   ): F[Unit] =
     for {
       // Request all blocks for Last Finalized State
@@ -208,7 +208,7 @@ class NodeSyncing[F[_]
                              edge,
                              incomingBlocksQueue.stream,
                              MultiParentCasper.deployLifespan,
-                             hash => CommUtil[F].broadcastRequestForBlock(hash, 1.some),
+                             hash => CommUtil[F].broadcastRequestForBlock(hash, 10.some),
                              requestTimeout = 3.seconds,
                              BlockStore[F].contains(_),
                              BlockStore[F].getUnsafe,
@@ -220,22 +220,15 @@ class NodeSyncing[F[_]
       blockRequestAddDagStream = blockRequestStream.last.unNoneTerminate.evalMap { st =>
         populateDag(st.heightMap) *>
           Log[F].info(s"Blocks for LFS received and added to the state.") *>
-          fs2.Stream
-            .emits(st.heightMap.values.flatten.toList.distinct)
-            .evalMap(BlockStore[F].getUnsafe)
-            // filter out blocks that had to be pulled just to have data to protect from replay attack
-            // (deployLifespan related)
-            .collect {
-              case b
-                  if (b.seqNum >= (edge.getUnsafe(b.sender) + MultiParentCasper.deployLifespan)) =>
-                List(b.preStateHash, b.postStateHash)
-            }
-            .flatMap(fs2.Stream.emits)
-            .map(_.toBlake2b256Hash)
-            .compile
-            .to(Set)
-            .flatMap(x => requestStates(finalStateHash +: x.toList)) *>
-          Log[F].info(s"States for LFS received and imported.")
+          requestStates(finalStateHashes) *> fs2.Stream
+          .emits(st.heightMap.values.flatten.toList.distinct)
+          .evalMap(BlockStore[F].getUnsafe)
+          // filter out blocks that had to be pulled just to have data to protect from replay attack
+          // (deployLifespan related)
+          .collect { case b if b.seqNum >= edge.getUnsafe(b.sender) => b.blockHash }
+          .compile
+          .toList *> Log[F].info(s"States for LFS received and imported.")
+
       }
       _ <- blockRequestAddDagStream.compile.drain
 
