@@ -1,3 +1,5 @@
 package coop.rchain.sdk.casper
 
-package object syntax extends CasperDagDataSyntax with CasperDagViewSyntax
+package object syntax {
+  object all extends CasperDagDataSyntax with CasperDagViewSyntax
+}
