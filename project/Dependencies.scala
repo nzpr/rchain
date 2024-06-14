@@ -65,7 +65,7 @@ object Dependencies {
     .intransitive() //we only use the lib for one util class (org.lightningj.util.ZBase32) that has no dependencies
   val lmdbjava            = "org.lmdbjava"                % "lmdbjava"                  % "0.9.0"
   val logbackClassic      = "ch.qos.logback"              % "logback-classic"           % "1.4.6"
-  val logstashLogback     = "net.logstash.logback"        % "logstash-logback-encoder"  % "6.6"
+  val logstashLogback     = "net.logstash.logback"        % "logstash-logback-encoder"  % "7.4"
   val lz4                 = "org.lz4"                     % "lz4-java"                  % "1.7.1"
   val magnolia            = "com.propensive"             %% "magnolia"                  % "0.17.0"
   val mockito             = "org.mockito"                %% "mockito-scala-cats"        % "1.17.14" % "test"
@@ -81,12 +81,13 @@ object Dependencies {
   val scalapbRuntime      = "com.thesamet.scalapb"       %% "scalapb-runtime"           % scalapb.compiler.Version.scalapbVersion % "protobuf"
   val scalapbRuntimeLib   = "com.thesamet.scalapb"       %% "scalapb-runtime"           % scalapb.compiler.Version.scalapbVersion
   val scalapbRuntimegGrpc = "com.thesamet.scalapb"       %% "scalapb-runtime-grpc"      % scalapb.compiler.Version.scalapbVersion
-  val grpcNetty           = "io.grpc"                     % "grpc-netty"                % scalapb.compiler.Version.grpcJavaVersion
-  val grpcServices        = "io.grpc"                     % "grpc-services"             % scalapb.compiler.Version.grpcJavaVersion
-  val nettyBoringSsl      = "io.netty"                    % "netty-tcnative-boringssl-static" % "2.0.46.Final"
-  val nettyTcnative       = "io.netty"                    % "netty-tcnative"            % "2.0.46.Final" classifier osClassifier
-  val nettyTcnativeLinux  = "io.netty"                    % "netty-tcnative"            % "2.0.46.Final" classifier "linux-x86_64"
-  val nettyTcnativeFedora = "io.netty"                    % "netty-tcnative"            % "2.0.46.Final" classifier "linux-x86_64-fedora"
+  val grpcServices        = "io.grpc"                     % "grpc-services"             % "1.60.0"
+  val grpcNetty           = "io.grpc"                     % "grpc-netty"                % "1.60.0"
+  val grpcNettyShaded     = "io.grpc"                     % "grpc-netty-shaded"         % "1.60.0"
+  val nettyBoringSsl      = "io.netty"                    % "netty-tcnative-boringssl-static" % "2.0.50.Final"
+  val nettyTcnative       = "io.netty"                    % "netty-tcnative"            % "2.0.50.Final" classifier osClassifier
+  val nettyTcnativeLinux  = "io.netty"                    % "netty-tcnative"            % "2.0.50.Final" classifier "linux-x86_64"
+  val nettyTcnativeFedora = "io.netty"                    % "netty-tcnative"            % "2.0.50.Final" classifier "linux-x86_64-fedora"
   val scalaCompat         = "org.scala-lang.modules"     %% "scala-collection-compat"   % "2.6.0"
   val scalatest           = "org.scalatest"              %% "scalatest"                 % "3.2.13"  % "test"
   val scalatestPlus       = "org.scalatestplus"          %% "scalacheck-1-16"           % "3.2.13.0" % "test"
@@ -98,7 +99,7 @@ object Dependencies {
   val slf4j               = "org.slf4j"                   % "slf4j-api"                 % slf4jVersion
   val weupnp              = "org.bitlet"                  % "weupnp"                    % "0.1.4"
   val sourcecode          = "com.lihaoyi"                %% "sourcecode"                % "0.2.1"
-  val grpcNettyShaded     = "io.grpc"                     % "grpc-netty-shaded"         % scalapb.compiler.Version.grpcJavaVersion
+  val influxdb =  "com.influxdb" % "influxdb3-java" % "0.4.0"
 
   // format: on
 
@@ -120,29 +121,37 @@ object Dependencies {
     sourcecode,
     scalatest,
     // Overrides for transitive dependencies (we don't use them directly, hence no val-s),
-    "com.squareup.okhttp3"   % "okhttp"           % "3.12.1",
-    "org.objenesis"          % "objenesis"        % "3.2",
-    "org.typelevel"          % "jawn-parser_2.13" % "1.1.2",
-    "com.github.jnr"         % "jnr-ffi"          % "2.2.13",
-    "com.lihaoyi"            %% "geny"            % "1.0.0",
-    "org.scala-lang.modules" %% "scala-xml"       % "2.1.0",
-    "com.typesafe"           % "config"           % "1.4.2",
-    // Added to resolve conflicts in scalapb plugin v0.11.3
-    "com.google.code.gson"  % "gson"                       % "2.10.1",
-    "com.google.protobuf"   % "protobuf-java"              % "3.12.2",
-    "com.google.errorprone" % "error_prone_annotations"    % "2.18.0",
-    "io.perfmark"           % "perfmark-api"               % "0.23.0",
-    "org.codehaus.mojo"     % "animal-sniffer-annotations" % "1.19",
-    "io.circe"              %% "circe-jawn"                % "0.14.1",
-    "io.circe"              %% "circe-core"                % "0.14.1",
-    "com.comcast"           %% "ip4s-core"                 % "3.0.4",
-    "org.typelevel"         %% "cats-free"                 % "2.9.0",
-    "org.typelevel"         %% "literally"                 % "1.0.2",
+    "com.squareup.okhttp3"       % "okhttp"                     % "3.12.1",
+    "org.objenesis"              % "objenesis"                  % "3.2",
+    "org.typelevel"              % "jawn-parser_2.13"           % "1.1.2",
+    "com.github.jnr"             % "jnr-ffi"                    % "2.2.13",
+    "com.lihaoyi"                %% "geny"                      % "1.0.0",
+    "org.scala-lang.modules"     %% "scala-xml"                 % "2.1.0",
+    "com.typesafe"               % "config"                     % "1.4.2",
+    "com.fasterxml.jackson.core" % "jackson-databind"           % "2.15.2",
+    "com.fasterxml.jackson.core" % "jackson-annotations"        % "2.15.2",
+    "com.fasterxml.jackson.core" % "jackson-core"               % "2.15.2",
+    "com.google.code.gson"       % "gson"                       % "2.10.1",
+    "com.google.protobuf"        % "protobuf-java"              % "3.19.6",
+    "com.google.errorprone"      % "error_prone_annotations"    % "2.18.0",
+    "io.perfmark"                % "perfmark-api"               % "0.23.0",
+    "org.codehaus.mojo"          % "animal-sniffer-annotations" % "1.19",
+    "io.circe"                   %% "circe-jawn"                % "0.14.1",
+    "io.circe"                   %% "circe-core"                % "0.14.1",
+    "com.comcast"                %% "ip4s-core"                 % "3.0.4",
+    "org.typelevel"              %% "cats-free"                 % "2.9.0",
+    "org.typelevel"              %% "literally"                 % "1.0.2",
     // Strange version conflict, it requires the same version but in square brackets (range?).
     // e.g. io.grpc:grpc-core:1.37.0 ([1.37.0] wanted)
     // https://stackoverflow.com/questions/59423185/strange-versions-conflict-in-sbt-strict-mode
-    "io.grpc" % "grpc-api"  % scalapb.compiler.Version.grpcJavaVersion,
-    "io.grpc" % "grpc-core" % scalapb.compiler.Version.grpcJavaVersion
+    "io.grpc"           % "grpc-netty"                      % "1.60.0",
+    "io.grpc"           % "grpc-api"                        % "1.60.0",
+    "io.grpc"           % "grpc-context"                    % "1.56.0",
+    "io.grpc"           % "grpc-core"                       % "1.60.0",
+    "io.grpc"           % "grpc-protobuf"                   % "1.60.0",
+    "io.grpc"           % "grpc-stub"                       % "1.60.0",
+    "io.netty"          % "netty-tcnative-boringssl-static" % "2.0.50.Final",
+    "com.google.j2objc" % "j2objc-annotations"              % "1.3"
   )
 
   private val kindProjector = compilerPlugin(
@@ -178,7 +187,7 @@ object Dependencies {
     Seq(scalapbRuntimeLib)
 
   val kamonDependencies: Seq[ModuleID] =
-    Seq(kamonCore, kamonSystemMetrics, kamonPrometheus, kamonZipkin, kamonInfluxDb)
+    Seq(kamonCore, kamonSystemMetrics, kamonPrometheus, kamonZipkin, influxdb)
 
   val apiServerDependencies: Seq[ModuleID] =
     http4sDependencies ++ circeDependencies

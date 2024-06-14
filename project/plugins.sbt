@@ -1,6 +1,6 @@
 addSbtPlugin("com.thesamet" % "sbt-protoc" % "1.0.6")
 // Yes it's weird to do the following, but it's what is mandated by the scalapb documentation
-libraryDependencies += "com.thesamet.scalapb" %% "compilerplugin" % "0.11.3"
+libraryDependencies += "com.thesamet.scalapb" %% "compilerplugin" % "0.11.15"
 
 addSbtPlugin("com.typesafe.sbt"       % "sbt-license-report"   % "1.2.0")
 addSbtPlugin("org.wartremover"        % "sbt-wartremover"      % "3.0.14")
@@ -18,5 +18,5 @@ addSbtPlugin("org.xerial.sbt"         % "sbt-sonatype"         % "2.6")
 addSbtPlugin("net.virtual-void"       % "sbt-dependency-graph" % "0.9.2")
 addSbtPlugin("io.spray"               % "sbt-revolver"         % "0.9.1")
 addSbtPlugin("com.sksamuel.scapegoat" %% "sbt-scapegoat"       % "1.1.1")
-addSbtPlugin("org.typelevel"          % "sbt-fs2-grpc"         % "2.5.11")
+addSbtPlugin("org.typelevel"          % "sbt-fs2-grpc"         % "2.7.14")
 addSbtPlugin("ch.epfl.scala"          % "sbt-scalafix"         % "0.10.4")
