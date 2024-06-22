@@ -18,6 +18,8 @@ import coop.rchain.casper.MultiParentCasper.deployLifespan
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
 
+import scala.util.Try
+
 /**
   * Last Finalized State processor for receiving blocks.
   */
@@ -208,7 +210,12 @@ object LfsBlockRequester {
 
                          // TODO this "- deployLifespan" is because double space of search for double spend might
                          //  be bigger then required to restore the state. Make it proper to download minimum.
-                         val old = edge.getUnsafe(block.sender) - deployLifespan >= block.seqNum
+                         val old = Try {
+                           Math.addExact(
+                             edge.getUnsafe(block.sender),
+                             -deployLifespan.toLong
+                           ) >= block.seqNum
+                         }.getOrElse(false)
 
                          // Accept block if it's requested and satisfy conditions
                          // - received one of latest messages
