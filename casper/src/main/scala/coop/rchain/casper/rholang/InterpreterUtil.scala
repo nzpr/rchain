@@ -85,11 +85,6 @@ object InterpreterUtil {
                      rejectedDeploys = Set()
                    ).pure[F]
                  }
-      blockStr          = PrettyPrinter.buildString(block, short = true)
-      fringeRejectedStr = PrettyPrinter.buildString(preState.fringeRejectedDeploys)
-      rejectedStr       = PrettyPrinter.buildString(preState.rejectedDeploys)
-      infoMsg           = s"Computed parents post state for block $blockStr, fringe rejections: $fringeRejectedStr, rejections: $rejectedStr"
-      _                 <- Log[F].info(infoMsg)
 
       computedPreStateHash = preState.preStateHash.toByteString
       rejectedDeployIds    = preState.fringeRejectedDeploys
@@ -102,9 +97,9 @@ object InterpreterUtil {
           Log[F]
             .warn(
               s"Computed rejected deploys " +
-                s"${rejectedDeployIds.map(PrettyPrinter.buildString).mkString(",")} does not equal " +
+                s"[${rejectedDeployIds.map(PrettyPrinter.buildString).mkString(",")}] does not equal " +
                 s"block's rejected deploy " +
-                s"${block.rejectedDeploys.map(PrettyPrinter.buildString).mkString(",")}"
+                s"[${block.rejectedDeploys.map(PrettyPrinter.buildString).mkString(",")}]"
             )
             .as(InvalidRejectedDeploy.asLeft)
         } else {

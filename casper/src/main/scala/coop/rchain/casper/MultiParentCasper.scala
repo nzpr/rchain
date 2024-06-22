@@ -177,10 +177,11 @@ object MultiParentCasper {
                                  }
       (preStateHash, csRejectedDeploys) = conflictScopeMergeResult
 
-      // TODO: in validation (InterpreterUtil.validateBlockCheckpoint) this is logged also, check how to unify
       csRejectedDeploysStr = PrettyPrinter.buildString(csRejectedDeploys)
-      csMsg                = s"Conflict scope merged with rejectedDeploys: $csRejectedDeploysStr"
-      _                    <- Log[F].info(csMsg)
+      fringeRejectedStr    = PrettyPrinter.buildString(fringeRecord.rejectedDeploys)
+      infoMsg = s"Computed parents post state, fringe rejections: $fringeRejectedStr, " +
+        s"rejections: $csRejectedDeploysStr"
+      _ <- Log[F].info(infoMsg)
     } yield ParentsMergedState(
       justifications = justifications.toSet,
       maxHeight,
