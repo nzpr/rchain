@@ -257,7 +257,10 @@ class NodeSyncing[F[_]
           .evalMap(BlockStore[F].getUnsafe)
           // filter out blocks that had to be pulled just to have data to protect from replay attack
           // (deployLifespan related)
-          .collect { case b if b.seqNum >= edge.getUnsafe(b.sender) => b.blockHash }
+          // TODO for some reason once it was observed that this is not enough when syncing to
+          //  the network with huge conflict set (1 block index was missing), so -5 is added
+          //  but it should be enough so find out why it's not enough
+          .collect { case b if b.seqNum >= edge.getUnsafe(b.sender) - 5 => b.blockHash }
           .compile
           .toList
           .flatMap(requestIndices) *>
