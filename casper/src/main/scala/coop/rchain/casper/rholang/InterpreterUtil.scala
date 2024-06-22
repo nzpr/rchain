@@ -95,15 +95,8 @@ object InterpreterUtil {
       rejectedDeployIds    = preState.fringeRejectedDeploys
       result <- {
         val incomingPreStateHash = block.preStateHash
-        if (incomingPreStateHash != computedPreStateHash) {
-          //TODO at this point we may just as well terminate the replay, there's no way it will succeed.
-          Log[F]
-            .warn(
-              s"Computed pre-state hash ${PrettyPrinter.buildString(computedPreStateHash)} does not equal block's pre-state hash ${PrettyPrinter
-                .buildString(incomingPreStateHash)}"
-            )
-            .as(false.asRight[InvalidBlock])
-        } else if (rejectedDeployIds != block.rejectedDeploys) {
+
+        if (rejectedDeployIds != block.rejectedDeploys) {
           // TODO: if rejected deploys are different that almost certain
           //  hashes doesn't match also so this branch is unreachable
           Log[F]
@@ -115,11 +108,31 @@ object InterpreterUtil {
             )
             .as(InvalidRejectedDeploy.asLeft)
         } else {
-          val rand = BlockRandomSeed.randomGenerator(block)
-          for {
-            replayResult <- replayBlock(incomingPreStateHash, block, rand)
-            result       <- handleErrors(block.postStateHash, replayResult)
-          } yield result.map(_.isDefined)
+          Log[F]
+            .warn(
+              s"Computed fringe ${preState.fringe.map(_.show.take(8))} " +
+                s"does not equal block's fringe ${block.fringe.map(_.show.take(8))}"
+            )
+            .whenA(block.fringe.toSet != preState.fringe) *> Log[F]
+            .warn(
+              s"Computed final hash ${PrettyPrinter.buildString(preState.fringeState.toByteString)} " +
+                s"does not equal block's final hash ${PrettyPrinter.buildString(block.finStateHash)}." +
+                s"Computed fringe ${preState.fringe.map(_.show.take(8))} " +
+                s"block's fringe ${block.fringe.map(_.show.take(8))}"
+            )
+            .whenA(block.finStateHash != preState.fringeState.toByteString) *> (Log[F]
+            .warn(
+              s"Computed pre-state hash ${PrettyPrinter.buildString(computedPreStateHash)} does not equal block's pre-state hash ${PrettyPrinter
+                .buildString(incomingPreStateHash)}"
+            ) *> Log[F].warn(
+            s"Fin SH block ${block.finStateHash.toBlake2b256Hash} computed ${preState.fringeState}"
+          )).whenA(incomingPreStateHash != computedPreStateHash) *> {
+            val rand = BlockRandomSeed.randomGenerator(block)
+            for {
+              replayResult <- replayBlock(incomingPreStateHash, block, rand)
+              result       <- handleErrors(block.postStateHash, replayResult)
+            } yield result.map(_.isDefined)
+          }
         }
       }
     } yield {
