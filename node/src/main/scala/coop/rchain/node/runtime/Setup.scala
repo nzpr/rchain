@@ -103,6 +103,8 @@ object Setup {
                    BlockRandomSeed.nonNegativeMergeableTagName(conf.casper.shardName),
                    executionTracker
                  )
+          // TODO remove, this is for node to have genesis pre state built. It should be empty trie instead.
+          _ <- rm._1.spawnRuntime.flatMap(_.emptyStateHash)
         } yield rm
       }
       (runtimeManager, historyRepo) = runtimeManagerWithHistory
@@ -147,7 +149,8 @@ object Setup {
           conf.casper.shardName,
           conf.casper.minPhloPrice,
           conf.casper.genesisBlockData.epochLength,
-          dummyDeployerKey.map((_, "Nil"))
+          dummyDeployerKey.map((_, "Nil")),
+          Log[F]
         )
       }
 

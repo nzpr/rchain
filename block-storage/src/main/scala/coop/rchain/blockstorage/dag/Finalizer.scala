@@ -151,7 +151,7 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
   def calculateFinalization(
       justifications: Set[Message[M, S]],
       bondsMap: Map[S, Long]
-  ): (Set[Message[M, S]], Option[Set[Message[M, S]]]) = {
+  ): (Set[Message[M, S]], List[Set[Message[M, S]]]) = {
     // Calculate next fringe from previous fringe
     def nextFringe(prevFringe: Set[Message[M, S]]): Option[Set[Message[M, S]]] =
       for {
@@ -179,8 +179,8 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
 
     // Find top most fringe
     // - multiple fringes can be finalized at once
-    val newFringeOpt = LazyList.unfold(parentFringe)(nextFringe(_).map(nf => (nf, nf))).lastOption
+    val newFringes = LazyList.unfold(parentFringe)(nextFringe(_).map(nf => (nf, nf)))
 
-    (parentFringe, newFringeOpt)
+    (parentFringe, newFringes.toList)
   }
 }
