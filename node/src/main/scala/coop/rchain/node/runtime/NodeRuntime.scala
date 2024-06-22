@@ -249,7 +249,9 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
             }
             .onFinalize(Log[F].warn(s"Graceful shutdown, all resources are successfully closed."))
             // Wait on never-ending-empty Stream, exit in case of an error or effect cancellation
-            .use(_.compile.drain)
+            .use(_.compile.drain.recoverWith { err =>
+              Log[F].error(s"Node crushed with$err") *> Sync[F].sleep(Int.MaxValue.seconds)
+            })
     } yield ()
   }
 
