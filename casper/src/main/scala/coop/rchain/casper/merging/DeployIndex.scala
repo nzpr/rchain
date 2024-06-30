@@ -22,10 +22,12 @@ object DeployIndex {
   val SYS_SLASH_DEPLOY_COST       = 0L
   val SYS_CLOSE_BLOCK_DEPLOY_COST = 0L
   val SYS_EMPTY_DEPLOY_COST       = 0L
+  val SYS_NF_DEPLOY_COST          = 0L
   // These are to be put in rejected set in blocks, so prefix format is defined for identification purposes.
-  val SYS_SLASH_DEPLOY_ID       = ByteString.copyFrom(Array(1.toByte))
+  val SYS_CLOSE_NF_DEPLOY_ID    = ByteString.copyFrom(Array(1.toByte))
   val SYS_CLOSE_BLOCK_DEPLOY_ID = ByteString.copyFrom(Array(2.toByte))
-  val SYS_EMPTY_DEPLOY_ID       = ByteString.copyFrom(Array(3.toByte))
+  val SYS_SLASH_DEPLOY_ID       = ByteString.copyFrom(Array(3.toByte))
+  val SYS_EMPTY_DEPLOY_ID       = ByteString.copyFrom(Array(4.toByte))
 
   def apply[F[_]: Async](
       sig: ByteString,

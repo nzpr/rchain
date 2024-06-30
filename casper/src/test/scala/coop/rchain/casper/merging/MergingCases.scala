@@ -2,11 +2,17 @@ package coop.rchain.casper.merging
 
 import cats.effect.{IO, Resource}
 import cats.syntax.all._
+import com.google.protobuf.ByteString
+import coop.rchain.casper.Validate.PublicKey
 import coop.rchain.casper.genesis.Genesis
-import coop.rchain.casper.rholang.sysdeploys.CloseBlockDeploy
+import coop.rchain.casper.protocol.DeployData
+import coop.rchain.casper.rholang.sysdeploys.{CloseBlockDeploy, NewFringeDeploy}
 import coop.rchain.casper.rholang.{BlockRandomSeed, Resources, RuntimeManager}
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.{ConstructDeploy, GenesisBuilder}
+import coop.rchain.crypto.{PrivateKey, PublicKey}
+import coop.rchain.crypto.signatures.Signed
+import coop.rchain.models.block.StateHash.StateHash
 import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.p2p.EffectsTestInstances.LogicalTime
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
@@ -31,6 +37,189 @@ class MergingCases extends AnyFlatSpec with Matchers {
     )
     rm <- Resource.eval(Resources.mkRuntimeManagerAt[IO](kvm, mergeableTag))
   } yield rm
+
+  "bond and fringe" should "" in effectTest {
+    runtimeManagerResource.use { runtimeManager =>
+      {
+        val baseState = genesis.postStateHash
+        val seqNum    = 1L
+        val blockNum  = 1L
+
+        def mk(
+            payer: PrivateKey,
+            stateTransitionCreator: coop.rchain.crypto.PublicKey,
+            term: String
+        ): IO[StateHash] =
+          for {
+            userDeploy <- ConstructDeploy.sourceDeployNowF[IO](term, sec = payer)
+            blockData = BlockData(
+              blockNum,
+              stateTransitionCreator,
+              seqNum
+            )
+            rand = BlockRandomSeed.randomGenerator(
+              genesis.shardId,
+              blockNum,
+              stateTransitionCreator,
+              genesis.postStateHash.toBlake2b256Hash
+            )
+            systemDeploys = Seq(
+              CloseBlockDeploy(rand.splitByte(2.toByte)),
+              NewFringeDeploy(rand.splitByte(3.toByte))
+            )
+            r <- runtimeManager.computeState(baseState)(
+                  Seq(userDeploy),
+                  systemDeploys,
+                  rand,
+                  blockData
+                )
+            (postStateHash, processedDeploys, _) = r
+
+            blkSender    = stateTransitionCreator.bytes
+            mergeableChs <- runtimeManager.loadMergeableChannels(postStateHash, blkSender, seqNum)
+
+            // Combine processed deploys with cached mergeable channels data
+            processedDeploysWithMergeable = processedDeploys.toVector.zip(mergeableChs)
+
+            idx <- processedDeploysWithMergeable.traverse {
+                    case (d, mergeChs) =>
+                      BlockIndex.createEventLogIndex(
+                        d.deployLog,
+                        runtimeManager.getHistoryRepo,
+                        baseState.toBlake2b256Hash,
+                        mergeChs
+                      )
+                  }
+            rand = BlockRandomSeed.randomGenerator(
+              "shardId",
+              0,
+              PublicKey.apply(ByteString.EMPTY),
+              postStateHash.toBlake2b256Hash
+            )
+            _ <- runtimeManager.computeState(postStateHash)(
+                  Seq(),
+                  Seq(NewFringeDeploy(postStateHash.toBlake2b256Hash)),
+                  rand,
+                  BlockData(0, PublicKey.apply(ByteString.EMPTY), 0)
+                )
+            _ = assert(idx.size == 1)
+          } yield postStateHash
+
+        val payer1Key    = genesisContext.genesisVaults.head._1
+        val payer1PubKey = genesisContext.genesisVaults.head._2
+        val payer2Key    = genesisContext.genesisVaults.tail.head._1
+        val sender1      = genesisContext.validatorKeyPairs.head._2
+        val sender2      = genesisContext.validatorKeyPairs.tail.head._2
+
+        val d =
+          """new PoSCh, rl(`rho:registry:lookup`), stdout(`rho:io:stdout`), deployerId(`rho:rchain:deployerId`), rCh in {
+          |  stdout!("About to lookup pos contract.") |
+          |  rl!(`rho:rchain:pos`, *PoSCh) |
+          |  for(@(_, PoS) <- PoSCh) {
+          |    stdout!("About to bond") |
+          |    @PoS!("bond", *deployerId, 3000, *rCh) |
+          |    for (@r <- rCh) {
+          |     stdout!(r)
+          |    }
+          |  }
+          |}""".stripMargin
+
+        mk(payer1Key, sender1, d).flatMap { x =>
+          runtimeManager.computeBonds(x).replicateA(20).map { x =>
+            x.toSet.size shouldBe 1
+            x.head.exists(_._1.toByteArray sameElements payer1PubKey.bytes)
+          }
+        }
+      }
+    }
+  }
+
+  "" should "" in effectTest {
+    runtimeManagerResource.use { runtimeManager =>
+      {
+        val baseState = genesis.postStateHash
+        val seqNum    = 1L
+        val blockNum  = 1L
+
+        def mk(
+            payer: PrivateKey,
+            stateTransitionCreator: coop.rchain.crypto.PublicKey,
+            term: String
+        ): IO[EventLogIndex] =
+          for {
+            userDeploy <- ConstructDeploy.sourceDeployNowF[IO](term, sec = payer)
+            blockData = BlockData(
+              blockNum,
+              stateTransitionCreator,
+              seqNum
+            )
+            rand = BlockRandomSeed.randomGenerator(
+              genesis.shardId,
+              blockNum,
+              stateTransitionCreator,
+              genesis.postStateHash.toBlake2b256Hash
+            )
+            systemDeploys = Seq(
+              CloseBlockDeploy(rand.splitByte(2.toByte)),
+              NewFringeDeploy(rand.splitByte(3.toByte))
+            )
+            r <- runtimeManager.computeState(baseState)(
+                  Seq(userDeploy),
+                  systemDeploys,
+                  rand,
+                  blockData
+                )
+            (postStateHash, processedDeploys, _) = r
+
+            blkSender    = stateTransitionCreator.bytes
+            mergeableChs <- runtimeManager.loadMergeableChannels(postStateHash, blkSender, seqNum)
+
+            // Combine processed deploys with cached mergeable channels data
+            processedDeploysWithMergeable = processedDeploys.toVector.zip(mergeableChs)
+
+            idx <- processedDeploysWithMergeable.traverse {
+                    case (d, mergeChs) =>
+                      BlockIndex.createEventLogIndex(
+                        d.deployLog,
+                        runtimeManager.getHistoryRepo,
+                        baseState.toBlake2b256Hash,
+                        mergeChs
+                      )
+                  }
+            _ = assert(idx.size == 1)
+          } yield idx.head
+
+        val payer1Key = genesisContext.genesisVaults.head._1
+        val payer2Key = genesisContext.genesisVaults.tail.head._1
+        val sender1   = genesisContext.validatorKeyPairs.head._2
+        val sender2   = genesisContext.validatorKeyPairs.tail.head._2
+
+        val d =
+          """new PoSCh, rl(`rho:registry:lookup`), stdout(`rho:io:stdout`), deployerId(`rho:rchain:deployerId`), rCh in {
+                  |  stdout!("About to lookup pos contract.") |
+                  |  rl!(`rho:rchain:pos`, *PoSCh) |
+                  |  for(@(_, PoS) <- PoSCh) {
+                  |    stdout!("About to bond") |
+                  |    @PoS!("bond", *deployerId, 3000, *rCh) |
+                  |    for (@r <- rCh) {
+                  |     stdout!(r)
+                  |    }
+                  |  }
+                  |}""".stripMargin
+
+//        val d = """new stdout(`rho:io:stdout`) in {stdout!("sdf;ldkfnds")}"""
+
+        (
+          mk(payer1Key, sender1, d).flatTap(_ => println("\n\n").pure[IO]),
+          mk(payer2Key, sender2, d)
+        ).mapN {
+          case (l, r) =>
+            val conflicts = EventLogMergingLogic.areConflicting(l, r)
+            println(conflicts)
+        }
+      }
+    }
+  }
 
   /**
     * Two deploys inside single state transition are using the same PVV for precharge and refund.

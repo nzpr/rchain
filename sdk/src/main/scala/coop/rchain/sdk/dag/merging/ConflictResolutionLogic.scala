@@ -234,12 +234,18 @@ object ConflictResolutionLogic {
     val conflictSetCompatible = conflictSet -- enforceRejected
     // conflict map accounting for dependencies
     val fullConflictsMap =
-      conflictsMap.view.mapValues(vs => vs ++ withDependencies(vs, dependencyMap)).toMap
+      conflictsMap.view
+        .filterKeys(conflictSetCompatible)
+        .mapValues(
+          vs =>
+            vs ++ withDependencies(vs, dependencyMap.view.filterKeys(conflictSetCompatible).toMap)
+        )
+        .toMap
     // find rejection combinations possible
     val rejectionOptions = computeRejectionOptions(fullConflictsMap)
     // add to rejection options rejections caused by mergeable channels overflow
     val mergeableOverflowRejectionOptions = addMergeableOverflowRejections(
-      conflictSet,
+      conflictSetCompatible,
       dependencyMap,
       rejectionOptions,
       initMergeableValues,
@@ -247,6 +253,14 @@ object ConflictResolutionLogic {
     )
     // find optimal rejection
     val resolved = computeOptimalRejection(mergeableOverflowRejectionOptions, cost)
-    (conflictSetCompatible -- resolved, resolved ++ enforceRejected)
+    val accept   = conflictSetCompatible -- resolved
+    val reject   = resolved ++ enforceRejected
+
+    assert(
+      accept.size + reject.size == conflictSet.size,
+      s"accept ${accept.size} rj ${reject.size}, total ${conflictSet.size}"
+    )
+
+    (accept, reject)
   }
 }

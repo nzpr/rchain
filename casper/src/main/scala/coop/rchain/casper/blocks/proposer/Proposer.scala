@@ -8,6 +8,7 @@ import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
+import coop.rchain.casper.merging.MergeScope
 import coop.rchain.casper.protocol.{BlockMessage, CommUtil}
 import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.syntax._
@@ -154,8 +155,8 @@ object Proposer {
         preStateBonds <- RuntimeManager[F].computeBonds(preStateHash.toByteString)
         toSlash       = offenders intersect preStateBonds.filter { case (_, b) => b > 0 }.keySet
         _             <- Log[F].info(s"Slashing senders: [${toSlash.map(_.show).mkString("; ")}]")
-        // epoch
-        changeEpoch = nextBlockNum % epochLength == 0
+        // epoch change on each new fringe
+        changeEpoch = !preState.justifications.exists(_.fringe == preState.fringe)
         // attestation
         // no need to attest if nothing meaningful to finalize.
         dag <- BlockDagStorage[F].getRepresentation
@@ -240,11 +241,16 @@ object Proposer {
 
     def checkValidatorIsActive(validator: ValidatorIdentity): F[Boolean] =
       for {
-        dag          <- BlockDagStorage[F].getRepresentation
-        latestFringe = dag.dagMessageState.latestFringe
+        dag      <- BlockDagStorage[F].getRepresentation
+        minGenJs = MergeScope.minGenJs(dag.dagMessageState.latestMsgs.map(_.id), dag)
+        bMaps    = minGenJs.map(dag.dagMessageState.msgMap(_).bondsMap)
+        _ = assert(
+          bMaps.size == 1,
+          "Parallel valid blocks see different bonds maps, should not be possible"
+        )
         // TODO: take bonds map from merged state of fringe
         //  - it should also include consensus bonds map
-        bondsMap <- if (latestFringe.nonEmpty) latestFringe.head.bondsMap.pure[F]
+        bondsMap <- if (bMaps.nonEmpty) bMaps.head.pure[F]
                    else BlockDagStorage[F].lookupUnsafe(dag.heightMap.head._2.head).map(_.bondsMap)
         sender = ByteString.copyFrom(validator.publicKey.bytes)
       } yield bondsMap.contains(sender)

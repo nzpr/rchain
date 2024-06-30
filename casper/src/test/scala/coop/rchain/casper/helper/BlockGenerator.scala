@@ -45,7 +45,8 @@ object BlockGenerator {
     fringeRejectedDeploys = Set(),
     // Pre-state is the same as fringe state
     preStateHash = RuntimeManager.emptyStateHashFixed.toBlake2b256Hash,
-    rejectedDeploys = Set()
+    rejectedDeploys = Set(),
+    List()
   )
 
   def step[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log: Metrics: Span](

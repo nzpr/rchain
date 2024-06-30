@@ -21,7 +21,7 @@ import coop.rchain.casper.protocol.deploy.v1.{
   ProcessedWithError,
   ProcessedWithSuccess
 }
-import coop.rchain.casper.rholang.RuntimeManager
+import coop.rchain.casper.rholang.{InterpreterUtil, RuntimeManager}
 import coop.rchain.casper.state.instances.ProposerState
 import coop.rchain.casper.syntax._
 import coop.rchain.casper.util._
@@ -493,7 +493,7 @@ class BlockApiImpl[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log
       lowestHeight  = startBlockNum - depthLimited
       topBlocks     = dag.dagMessageState.msgMap.valuesIterator.filter(_.height >= lowestHeight)
       blocks = topBlocks.map { m =>
-        def toHashStr(blockHash: BlockHash) = blockHash.toHexString.take(5)
+        def toHashStr(blockHash: BlockHash) = blockHash.toHexString.take(6)
         val blockHashStr                    = toHashStr(m.id)
         val parentsStr                      = m.parents.map(toHashStr).toList
         val fringeStr                       = m.fringe.map(toHashStr)
@@ -690,6 +690,25 @@ class BlockApiImpl[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log
       }
       .attempt
       .map(_.leftMap(_.getMessageSafe))
+
+  override def replay(hash: String): F[ApiErr[String]] =
+    for {
+      blockHash <- hash.hexToByteString.liftTo(
+                    new Exception(s"Invalid block hash base 16 encoding, $hash")
+                  )
+      block <- BlockStore[F].get1(blockHash)
+      r <- {
+        implicit val m: Metrics.MetricsNOP[F] = new Metrics.MetricsNOP()
+        block
+          .traverse(
+            InterpreterUtil
+              .validateBlockCheckpoint[F](_)
+              .map(_ => "OK")
+          )
+          .map(_.toRight(s"No block $blockHash in block store"))
+
+      }
+    } yield r
 
   private def getDataAtParRaw(
       par: Par,

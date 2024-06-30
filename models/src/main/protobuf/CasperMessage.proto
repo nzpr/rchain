@@ -149,10 +149,14 @@ message SlashSystemDeployDataProto {
 message CloseBlockSystemDeployDataProto{
 }
 
+message NewFringeSystemDeployDataProto{
+}
+
 message SystemDeployDataProto{
   oneof systemDeploy{
     SlashSystemDeployDataProto slashSystemDeploy = 1;
     CloseBlockSystemDeployDataProto closeBlockSystemDeploy = 2;
+    NewFringeSystemDeployDataProto newFringeSystemDeploy = 3;
   }
 }
 

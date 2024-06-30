@@ -8,6 +8,7 @@ trait AdminWebApi[F[_]] {
   def propose: F[String]
   def proposeResult: F[String]
   def vDag(depth: Int, startBlockNumber: Int, showJs: Boolean): F[String]
+  def replay(hash: String): F[String]
 }
 
 object AdminWebApi {
@@ -25,5 +26,8 @@ object AdminWebApi {
         .visualizeDag(depth, startBlockNumber, showJs)
         .flatMap(_.liftToBlockApiErr)
         .map(_.mkString)
+
+    override def replay(hash: String): F[String] =
+      blockApi.replay(hash).flatMap(_.liftToBlockApiErr[F])
   }
 }

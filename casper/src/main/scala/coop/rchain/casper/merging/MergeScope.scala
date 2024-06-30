@@ -110,7 +110,7 @@ object MergeScope {
       historyRepository: RhoHistoryRepository[F],
       blockIndex: BlockHash => F[BlockIndex],
       rejectionCost: DeployChainIndex => Long = DeployChainIndex.deployChainCost
-  ): F[(Blake2b256Hash, Set[ByteString])] = {
+  ): F[(Blake2b256Hash, Set[ByteString], Set[ByteString])] = {
     // if some indices can be computed - merge is impossible.
     val loadIndices = List(mergeScope.conflictScope, mergeScope.finalScope)
       .traverse(_.toList.traverse(blockIndex).map(_.toSet))
@@ -119,6 +119,10 @@ object MergeScope {
       case List(conflictScope, finalScope) =>
         val conflictSet = conflictScope.flatMap(_.deployChains)
         val finalSet    = finalScope.flatMap(_.deployChains)
+//        println(s"conflictScope ${conflictScope.map(_.deployChains.size)}")
+//        println(s"finalScope ${finalScope.map(_.deployChains.size)}")
+//        println(s"conflictSet ${conflictSet.size}")
+//        println(s"finalSet ${finalSet.size}")
         // finalization decisions made in final set
         val (rejectedFinally, acceptedFinally) = {
           val rejectionsMap = fringeStates.flatMap { case (k, v) => k.map((_, v.rejectedDeploys)) }
@@ -157,10 +161,20 @@ object MergeScope {
             initMergeableValues = initMergeableValues
           )
         }
+        import coop.rchain.models.syntax._
         resolveConflicts.flatMap {
           case (toMerge, rejected) =>
+//            println(s"toMerge ${toMerge.size} rejected ${rejected.size}")
+//            println(s"toMerge ${toMerge.toList
+//              .map(_.deploysWithCost.map(_.id).show)} rejected ${rejected.toList
+//              .map(_.deploysWithCost.map(_.id).show)}")
+
             computeMergedState(toMerge, baseState, historyRepository).map { newState =>
-              (newState, rejected.flatMap(_.deploysWithCost.map(_.id)))
+              (
+                newState,
+                rejected.flatMap(_.deploysWithCost.map(_.id)),
+                toMerge.flatMap(_.deploysWithCost.map(_.id))
+              )
             }
         }
     }
@@ -205,7 +219,7 @@ object MergeScope {
       overallChanges                    = s"${allChanges.datumsChanges.size} D, ${allChanges.kontChanges.size} K, ${allChanges.consumeChannelsToJoinSerializedMap.size} J"
       logStr = s"Merging done. Changes: $overallChanges; " +
         s"trie actions (${trieActions.size}) computed in ${computeActionsTime}; " +
-        s"actions applied in ${applyActionsTime}"
+        s"actions applied in ${applyActionsTime}. ${baseState} => ${newState}"
       _ <- Log[F].debug(logStr)
     } yield newState
 }

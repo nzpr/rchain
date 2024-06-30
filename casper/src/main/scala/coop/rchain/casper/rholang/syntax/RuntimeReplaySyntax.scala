@@ -7,6 +7,7 @@ import coop.rchain.casper.CasperMetricsSource
 import coop.rchain.casper.protocol.{
   CloseBlockSystemDeployData,
   Empty,
+  NewFringeSystemDeployData,
   ProcessedDeploy,
   ProcessedSystemDeploy,
   SlashSystemDeployData
@@ -15,6 +16,7 @@ import coop.rchain.casper.rholang.InterpreterUtil.printDeployErrors
 import coop.rchain.casper.rholang.syntax.RuntimeSyntax.SysEvalResult
 import coop.rchain.casper.rholang.sysdeploys.{
   CloseBlockDeploy,
+  NewFringeDeploy,
   PreChargeDeploy,
   RefundDeploy,
   SlashDeploy
@@ -122,16 +124,26 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
           }
         }
     }
-    val sysDeploys = (systemDeploys, Vector[NumberChannelsEndVal](), terms.length).tailRecM {
-      case (Seq(), mergeable, _) =>
-        mergeable.asRight[ReplayFailure].asRight[Params[ProcessedSystemDeploy]].pure[F]
-      case (ts, mergeable, randIndex) =>
-        Span[F].traceI("replay-sys-deploy") {
-          replaySystemDeploy(ts.head, rand.splitByte(randIndex.toByte)).map { a =>
-            a.map(x => (ts.tail, mergeable :+ x, randIndex + 1))
-              .swap
-              .map(_.asLeft[Vector[NumberChannelsEndVal]])
-          }
+    val sysDeploys = {
+      if (systemDeploys.size == 1 && systemDeploys.head.systemDeploy == NewFringeSystemDeployData) {
+        val rnd = NewFringeDeploy.rand(startHash.toBlake2b256Hash)
+        println(
+          s"Replaying rand ${(Blake2b256Hash.fromByteArray(rnd.copy().next()))}"
+        )
+        replaySystemDeploy(systemDeploys.head, rnd).map(_.map(Vector(_)))
+      } else
+        (systemDeploys, Vector[NumberChannelsEndVal](), terms.length).tailRecM {
+          case (Seq(), mergeable, _) =>
+            mergeable.asRight[ReplayFailure].asRight[Params[ProcessedSystemDeploy]].pure[F]
+          case (ts, mergeable, randIndex) =>
+            Span[F].traceI("replay-sys-deploy") {
+              val rnd = rand.splitByte(randIndex.toByte)
+              replaySystemDeploy(ts.head, rnd).map { a =>
+                a.map(x => (ts.tail, mergeable :+ x, randIndex + 1))
+                  .swap
+                  .map(_.asLeft[Vector[NumberChannelsEndVal]])
+              }
+            }
         }
     }
     val refT = Ref[F].of(Vector[NumberChannelsEndVal]()).liftEitherT[ReplayFailure]
@@ -295,6 +307,19 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
         rigWithCheck(
           processedSysDeploy,
           replaySystemDeployInternal(closeBlockDeploy, none).semiflatMap {
+            case (_, er) =>
+              runtime.createSoftCheckpoint.whenA(er.succeeded) *>
+                runtime.getNumberChannelsData(er.mergeable).map((_, er))
+          }
+        ).map(_._1)
+      case NewFringeSystemDeployData =>
+        println(
+          s"Replaying NewFringeSystemDeployData rand ${(Blake2b256Hash.fromByteArray(rand.copy().next()))}"
+        )
+        val newFringeDeploy = NewFringeDeploy(rand)
+        rigWithCheck(
+          processedSysDeploy,
+          replaySystemDeployInternal(newFringeDeploy, none).semiflatMap {
             case (_, er) =>
               runtime.createSoftCheckpoint.whenA(er.succeeded) *>
                 runtime.getNumberChannelsData(er.mergeable).map((_, er))

@@ -212,14 +212,16 @@ object BlockMessage {
       .withSigAlgorithm(bm.sigAlgorithm)
       .withSig(bm.sig)
       .withView(
-        bm.view.seen.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }.toList
+        bm.view.seen.toList.sortBy(_._1).map {
+          case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong)
+        }
       )
       .withFringe(bm.fringe)
       .withFinStateHash(bm.finStateHash)
       .withMergeables(bm.mergeables.map { x =>
-        DeploysChannelDiff(x.map {
+        DeploysChannelDiff(x.toList.sortBy(_._1).map {
           case (c, d) => ChannelDiffs.apply(c.toByteString, d)
-        }.toList)
+        })
       }.toList)
   }
 
@@ -301,6 +303,7 @@ sealed trait SystemDeployData
 
 final case class SlashSystemDeployData(slashedValidator: Validator) extends SystemDeployData
 case object CloseBlockSystemDeployData                              extends SystemDeployData
+case object NewFringeSystemDeployData                               extends SystemDeployData
 case object Empty                                                   extends SystemDeployData
 
 object SystemDeployData {
@@ -309,8 +312,11 @@ object SystemDeployData {
   def from(slashedValidator: Validator): SystemDeployData =
     SlashSystemDeployData(slashedValidator)
 
-  def from(): SystemDeployData =
+  def closeBlock(): SystemDeployData =
     CloseBlockSystemDeployData
+
+  def newFringe(): SystemDeployData =
+    NewFringeSystemDeployData
 
   def fromProto(proto: SystemDeployDataProto): SystemDeployData =
     proto.systemDeploy match {
@@ -318,6 +324,8 @@ object SystemDeployData {
         SlashSystemDeployData(sd.slashedValidator)
       case SystemDeployDataProto.SystemDeploy.CloseBlockSystemDeploy(_) =>
         CloseBlockSystemDeployData
+      case SystemDeployDataProto.SystemDeploy.NewFringeSystemDeploy(_) =>
+        NewFringeSystemDeployData
       case _ => Empty
     }
 
@@ -330,6 +338,10 @@ object SystemDeployData {
       case CloseBlockSystemDeployData =>
         SystemDeployDataProto().withCloseBlockSystemDeploy(
           CloseBlockSystemDeployDataProto()
+        )
+      case NewFringeSystemDeployData =>
+        SystemDeployDataProto().withNewFringeSystemDeploy(
+          NewFringeSystemDeployDataProto()
         )
       case Empty => SystemDeployDataProto()
     }

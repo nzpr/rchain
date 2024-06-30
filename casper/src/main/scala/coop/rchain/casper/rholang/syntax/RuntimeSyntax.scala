@@ -13,6 +13,7 @@ import coop.rchain.casper.rholang.RuntimeDeployResult._
 import coop.rchain.casper.rholang.syntax.RuntimeSyntax._
 import coop.rchain.casper.rholang.sysdeploys.{
   CloseBlockDeploy,
+  NewFringeDeploy,
   PreChargeDeploy,
   RefundDeploy,
   SlashDeploy
@@ -366,7 +367,16 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
                               .playSucceeded(
                                 finalStateHash,
                                 eventLog,
-                                SystemDeployData.from(),
+                                SystemDeployData.closeBlock(),
+                                mcl,
+                                result
+                              )
+                          case NewFringeDeploy(_) =>
+                            SystemDeployResult
+                              .playSucceeded(
+                                finalStateHash,
+                                eventLog,
+                                SystemDeployData.newFringe(),
                                 mcl,
                                 result
                               )
@@ -600,9 +610,11 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
 
   private def bondsQuerySource: String =
     s"""
-       # new return, rl(`rho:registry:lookup`), poSCh in {
+       # new return, rl(`rho:registry:lookup`), poSCh, stdout(`rho:io:stdout`) in {
+       #   stdout!("return") |
        #   rl!(`rho:rchain:pos`, *poSCh) |
        #   for(@(_, Pos) <- poSCh) {
+       #     stdout!("poSCh") |
        #     @Pos!("getBonds", *return)
        #   }
        # }
@@ -610,7 +622,10 @@ final class RuntimeOps[F[_]](private val runtime: RhoRuntime[F]) extends AnyVal 
 
   private def toValidatorSeq(validatorsPar: Par): Seq[Validator] =
     validatorsPar.exprs.head.getESetBody.ps.map { validator =>
-      assert(validator.exprs.length == 1, "Validator in bonds map wasn't a single string.")
+      assert(
+        validator.exprs.length == 1,
+        s"Validator in bonds map wasn't a single string. $validator"
+      )
       validator.exprs.head.getGByteArray
     }.toList
 
