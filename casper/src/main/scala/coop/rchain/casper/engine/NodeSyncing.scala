@@ -189,7 +189,7 @@ class NodeSyncing[F[_]
         TransportLayer[F].sendToBootstrap(
           StoreItemsMessageRequest(statePartPath, 0, pageSize).toProto
         ),
-      requestTimeout = 10.seconds,
+      requestTimeout = 60.seconds,
       RSpaceStateManager[F].importer,
       stateValidator
     )
