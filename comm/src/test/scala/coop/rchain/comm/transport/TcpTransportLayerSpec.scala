@@ -42,7 +42,7 @@ class TcpTransportLayerSpec extends TransportLayerSpec[IO, TcpTlsEnvironment] {
         maxMessageSize,
         maxMessageSize,
         100,
-        Ref.unsafe[IO, Map[PeerNode, Deferred[IO, BufferedGrpcStreamChannel[IO]]]](Map.empty)
+        Ref.unsafe[IO, Map[Endpoint, Deferred[IO, BufferedGrpcStreamChannel[IO]]]](Map.empty)
       )
     )
 

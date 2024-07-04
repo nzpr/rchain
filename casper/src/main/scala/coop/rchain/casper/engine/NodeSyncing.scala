@@ -138,7 +138,7 @@ class NodeSyncing[F[_]
       sender: PeerNode,
       msg: BootstrapDataMessage
   ): F[Unit] = {
-    val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_ == sender))
+    val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_.endpoint == sender.endpoint))
 
     def handleApprovedBlock = {
       val fringeLogMsg = s"Received bootstrap data ${msg.show}."

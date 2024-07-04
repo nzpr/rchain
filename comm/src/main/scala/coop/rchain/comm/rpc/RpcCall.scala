@@ -39,7 +39,7 @@ object RpcCall {
               if (status != Status.OK)
                 promise.failure(
                   callFailure(
-                    s"Failed to send message $msg through channel $channel",
+                    s"Failed to send message $msg through channel $channel due to ${status.asRuntimeException()}",
                     status.asRuntimeException()
                   )
                 )

@@ -42,7 +42,9 @@ object RpcServer {
             .start()
         } <* Log.log[F].info(s"Low level RPC engine started on port $port.")
       ) { server =>
-        Sync[F].delay(server.shutdown()) *> Log.log[F].info(s"Low level RPC engine stopped.")
+        Sync[F].delay(server.shutdown().awaitTermination()) *> Log
+          .log[F]
+          .info(s"Low level RPC engine stopped.")
       }
     }
 }
