@@ -15,11 +15,11 @@ import java.io.{Reader, StringReader}
 
 trait Compiler[F[_]] {
 
-  def sourceToADT(source: String): F[Par] =
+  def sourceToADT(source: String)(implicit s: Sync[F]): F[Par] =
     sourceToADT(source, Map.empty[String, Par])
 
-  def sourceToADT(source: String, normalizerEnv: Map[String, Par]): F[Par] =
-    sourceToADT(new StringReader(source), normalizerEnv)
+  def sourceToADT(source: String, normalizerEnv: Map[String, Par])(implicit s: Sync[F]): F[Par] =
+    Sync[F].defer(sourceToADT(new StringReader(source), normalizerEnv))
 
   def sourceToADT(reader: Reader): F[Par] =
     sourceToADT(reader, Map.empty[String, Par])

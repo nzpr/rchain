@@ -1,9 +1,10 @@
 package coop.rchain.node.runtime
 
-import cats.effect.Async
+import cats.effect.{Async, Deferred, Ref, Temporal}
 import cats.mtl.ApplicativeAsk
 import cats.syntax.all._
 import cats.{Parallel, Show}
+import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.{approvedStore, BlockStore}
 import coop.rchain.casper._
 import coop.rchain.casper.api.{BlockApiImpl, BlockReportApi}
@@ -39,13 +40,12 @@ import coop.rchain.node.web.{ReportingRoutes, Transaction}
 import coop.rchain.rholang.interpreter.RhoRuntime
 import coop.rchain.rspace.state.instances.RSpaceStateManagerImpl
 import coop.rchain.rspace.syntax._
+import coop.rchain.sdk.cache.Cache
 import coop.rchain.shared._
 import coop.rchain.shared.syntax._
 import coop.rchain.store.KeyValueStoreManager
 import fs2.Stream
 import fs2.concurrent.Channel
-import cats.effect.{Deferred, Ref, Temporal}
-import coop.rchain.sdk.cache.Cache
 
 object Setup {
   def setupNodeProgram[F[_]: Async: Parallel: LocalEnvironment: TransportLayer: NodeDiscovery: Log: Metrics: Cache](
@@ -62,7 +62,9 @@ object Setup {
         GrpcServices[F],
         WebApi[F],
         AdminWebApi[F],
-        ReportingHttpRoutes[F]
+        ReportingHttpRoutes[F],
+        BlockStore[F],
+        RuntimeManager[F]
     )
   ] = {
     for {
@@ -101,6 +103,8 @@ object Setup {
                    BlockRandomSeed.nonNegativeMergeableTagName(conf.casper.shardName),
                    executionTracker
                  )
+          // TODO remove, this is for node to have genesis pre state built. It should be empty trie instead.
+          _ <- rm._1.spawnRuntime.flatMap(_.emptyStateHash)
         } yield rm
       }
       (runtimeManager, historyRepo) = runtimeManagerWithHistory
@@ -145,7 +149,8 @@ object Setup {
           conf.casper.shardName,
           conf.casper.minPhloPrice,
           conf.casper.genesisBlockData.epochLength,
-          dummyDeployerKey.map((_, "Nil"))
+          dummyDeployerKey.map((_, "Nil")),
+          Log[F]
         )
       }
 
@@ -326,7 +331,9 @@ object Setup {
       grpcServices,
       webApi,
       adminWebApi,
-      reportingRoutes
+      reportingRoutes,
+      blockStore,
+      runtimeManager
     )
   }
 }

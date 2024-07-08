@@ -1,5 +1,5 @@
 package coop.rchain.sdk.syntax
 
-import coop.rchain.sdk.primitive._
+import coop.rchain.sdk.primitive.syntax.PrimitiveSyntax
 
-trait AllSyntax extends ThrowableSyntax with TrySyntax with VoidSyntax with MapSyntax
+trait AllSyntax extends PrimitiveSyntax

@@ -8,20 +8,20 @@ import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
-import coop.rchain.casper.blocks.{BlockReceiver, BlockRetriever}
+import coop.rchain.casper.blocks.BlockRetriever
 import coop.rchain.casper.dag.BlockDagKeyValueStorage
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.syntax._
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.Metrics
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.{RSpaceExporter, RSpaceStateManager}
-import coop.rchain.shared.syntax._
 import coop.rchain.shared.Log
+import coop.rchain.shared.syntax._
 import fs2.concurrent.Channel
 
 object NodeRunning {
@@ -278,22 +278,20 @@ class NodeRunning[F[_]
         lowerBound = {
           val x = BlockDagKeyValueStorage
             .dbPruneFringe(dag.dagMessageState, dag.childMap)
-            // TODO this "- deployLifespan" is because double space of search for double spend might
-            //  be bigger then required to restore the state. Make it proper to download minimum.
-            .map(x => ProposeSlot(x.sender, x.senderSeq - deployLifespan))
+            .map(x => ProposeSlot(x.sender, x.senderSeq))
           if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
         }
 
-        finalStateHash = dag.fringeStates
-          .getUnsafe(
-            dag.dagMessageState.msgMap
-              .lowestFringe(dag.dagMessageState.latestMsgs)
-              .map(_.id)
-          )
-          .stateHash
-          .toByteString
+        finalStateHashes = dag.dagMessageState.latestMsgs
+          .map(_.fringe)
+          .map(dag.fringeStates)
+          .map(_.stateHash.toByteString)
 
-        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound, finalStateHash)
+        sh <- if (finalStateHashes == Set(RuntimeManager.emptyStateHashFixed))
+               BlockStore[F].getUnsafe(dag.heightMap.head._2.head).map(_.postStateHash).map(Set(_))
+             else finalStateHashes.pure
+
+        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound, sh.toList)
 
         _ <- handleBootstrapDataRequest(peer, bootstrapDataMsg)
 

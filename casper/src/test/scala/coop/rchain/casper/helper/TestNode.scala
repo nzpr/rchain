@@ -431,7 +431,7 @@ object TestNode {
 
                  proposer = validatorId match {
                    case Some(vi) =>
-                     Proposer[F](vi, shardName, minPhloPrice, Int.MaxValue).some
+                     Proposer[F](vi, shardName, minPhloPrice, Int.MaxValue, None, Log.log[F]).some
                    case None => None
                  }
                  // propose function in casper tests is always synchronous

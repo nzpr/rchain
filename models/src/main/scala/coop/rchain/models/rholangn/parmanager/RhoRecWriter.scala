@@ -3,7 +3,7 @@ package coop.rchain.models.rholangn.parmanager
 import cats.Applicative
 import cats.syntax.all._
 import coop.rchain.models.rholangn.RhoTypeN
-import coop.rchain.models.rholangn.parmanager.primitive.PrimitiveWriter
+import coop.rchain.sdk.serialize.PrimitiveWriter
 
 object RhoRecWriter {
   def apply[F[_]: Applicative](

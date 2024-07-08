@@ -1,4 +1,4 @@
-package coop.rchain.sdk.primitive
+package coop.rchain.sdk.primitive.syntax
 
 import scala.util.{Failure, Success, Try}
 

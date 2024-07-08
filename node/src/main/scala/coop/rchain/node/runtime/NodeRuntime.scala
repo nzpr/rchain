@@ -1,12 +1,15 @@
 package coop.rchain.node.runtime
 
 import cats.Parallel
-import cats.effect.{Async, Ref, Resource, Sync, Temporal}
+import cats.effect._
 import cats.mtl._
 import cats.syntax.all._
 import com.typesafe.config.Config
+import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.casper.blocks.BlockRetriever
+import coop.rchain.casper.merging.BlockIndex
 import coop.rchain.casper.protocol.CommUtil
+import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.storage.RNodeKeyValueStoreManager
 import coop.rchain.comm._
 import coop.rchain.comm.discovery._
@@ -195,7 +198,16 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
                        nodeConf
                      )
                    }
-          (nodeLaunch, routingMsgQueue, grpcServices, webApi, adminWebApi, reportRoutes) = result
+          (
+            nodeLaunch,
+            routingMsgQueue,
+            grpcServices,
+            webApi,
+            adminWebApi,
+            reportRoutes,
+            blockStore,
+            runtimeManager
+          ) = result
 
           // Build network resources
           _ <- NetworkServers.create(
@@ -207,6 +219,17 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
                 nodeConf,
                 kamonConf
               )
+
+          _ <- {
+            implicit val bs: BlockStore[F]     = blockStore
+            implicit val rm: RuntimeManager[F] = runtimeManager
+            RpcServer.apply(
+              40406,
+              nodeConf.protocolServer.grpcMaxRecvMessageSize.toInt,
+              BlockIndex.getBlockIndex(_)
+            )
+          }
+
           // Return node launch stream
         } yield nodeLaunch
       }
@@ -226,7 +249,9 @@ class NodeRuntime[F[_]: Parallel: Async: LocalEnvironment: Log] private[node] (
             }
             .onFinalize(Log[F].warn(s"Graceful shutdown, all resources are successfully closed."))
             // Wait on never-ending-empty Stream, exit in case of an error or effect cancellation
-            .use(_.compile.drain)
+            .use(_.compile.drain.recoverWith { err =>
+              Log[F].error(s"Node crushed with$err") *> Sync[F].sleep(Int.MaxValue.seconds)
+            })
     } yield ()
   }
 

@@ -1601,7 +1601,10 @@ class DebruijnInterpreter[M[_]: Sync: Parallel: CostStateRef](
     else
       p.exprs match {
         case (e: Expr) +: Nil => evalExprToExpr(e)
-        case _                => ReduceError("Error: Multiple expressions given.").raiseError[M, Expr]
+        case _ =>
+          ReduceError(
+            s"Error: Multiple expressions given while evaluating par to single expression. Par: $p."
+          ).raiseError[M, Expr]
       }
 
   private def evalToLong(
@@ -1659,7 +1662,9 @@ class DebruijnInterpreter[M[_]: Sync: Parallel: CostStateRef](
                            .raiseError[M, Boolean]
                      }
           } yield result
-        case _ => ReduceError("Error: Multiple expressions given.").raiseError[M, Boolean]
+        case _ =>
+          ReduceError(s"Error: Multiple expressions given while evaluating Par to Bool.\nPar: $p")
+            .raiseError[M, Boolean]
       }
 
   private def restrictToInt(long: Long): M[Int] =

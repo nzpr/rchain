@@ -9,7 +9,7 @@ import coop.rchain.comm.protocol.routing._
 import coop.rchain.comm.rp.ProtocolHelper.protocol
 import coop.rchain.comm.transport._
 import coop.rchain.comm.{CommError, PeerNode}
-import io.grpc.Server
+import io.grpc.{Channel, Server}
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -71,6 +71,8 @@ class TransportLayerTestImpl[F[_]: Monad: TestNetwork]() extends TransportLayer[
 
   def clear(peer: PeerNode): F[Unit] =
     TestNetwork.clear(peer)
+
+  override def channel(peer: PeerNode): Resource[F, Channel] = ???
 }
 
 class TransportLayerServerTestImpl[F[_]: Sync: TestNetwork](identity: PeerNode)

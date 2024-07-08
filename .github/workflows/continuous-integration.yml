@@ -25,6 +25,8 @@ env:
   # OpenJDK 11, makes some unit tests occasionally fail on OutOfMemoryError on
   # GitHub runners which have only 7GB of RAM.
   _JAVA_OPTIONS: -XX:MaxRAMPercentage=80.0 -XX:MaxDirectMemorySize=128M
+  # workaround required for actions, https://github.com/actions/checkout/issues/1590
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
 

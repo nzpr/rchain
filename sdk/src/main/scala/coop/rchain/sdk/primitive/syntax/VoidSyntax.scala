@@ -1,4 +1,4 @@
-package coop.rchain.sdk.primitive
+package coop.rchain.sdk.primitive.syntax
 
 trait VoidSyntax {
   implicit def sdkSyntaxVoid[A](a: A): VoidOps[A] = new VoidOps(a)

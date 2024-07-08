@@ -1,8 +1,10 @@
 package coop.rchain.comm.transport
 
+import cats.effect.Resource
 import coop.rchain.comm.CommError.CommErr
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.protocol.routing._
+import io.grpc.Channel
 
 final case class Blob(sender: PeerNode, packet: Packet)
 
@@ -10,6 +12,7 @@ trait TransportLayer[F[_]] {
   def send(peer: PeerNode, msg: Protocol): F[CommErr[Unit]]
   def broadcast(peers: Seq[PeerNode], msg: Protocol): F[Seq[CommErr[Unit]]]
   def stream(peers: Seq[PeerNode], blob: Blob): F[Unit]
+  def channel(peer: PeerNode): Resource[F, Channel]
 }
 
 object TransportLayer {

@@ -1,7 +1,7 @@
 package coop.rchain.p2p
 
 import cats.Applicative
-import cats.effect.Sync
+import cats.effect.{Resource, Sync}
 import cats.syntax.all._
 import coop.rchain.comm.CommError._
 import coop.rchain.comm._
@@ -11,6 +11,7 @@ import coop.rchain.comm.rp._
 import coop.rchain.comm.transport._
 import coop.rchain.shared.Log.NOPLog
 import coop.rchain.shared._
+import io.grpc.Channel
 
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 
@@ -101,6 +102,8 @@ object EffectsTestInstances {
 
     override def stream(peers: Seq[PeerNode], blob: Blob): F[Unit] =
       broadcast(peers, ProtocolHelper.protocol(blob.sender, networkId).withPacket(blob.packet)).void
+
+    override def channel(peer: PeerNode): Resource[F, Channel] = ???
   }
 
   class LogStub[F[_]: Sync](delegate: Log[F]) extends Log[F] {
