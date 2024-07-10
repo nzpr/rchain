@@ -118,30 +118,16 @@ object MultiParentCasper {
                                     msgMap,
                                     dag.hashLookup.getUnsafe
                                   )
-                                val checkGenesisCase =
-                                  if (prevFringe.isEmpty) {
-                                    // genesis case
-                                    val genesisHash = dag.heightMap.getUnsafe(0).head
-                                    BlockStore[F]
-                                      .getUnsafe(genesisHash)
-                                      .map(
-                                        mScope.copy(
-                                          conflictScope = mScope.conflictScope - genesisHash
-                                        ) -> _.postStateHash.toBlake2b256Hash
-                                      )
-                                  } else (mScope, prevFringeStateHash).pure
-                                checkGenesisCase.flatMap {
-                                  case (mScope1, prevFringeStateHash1) =>
-                                    MergeScope
-                                      .merge(
-                                        mScope1,
-                                        prevFringeStateHash1,
-                                        dag.fringeStates,
-                                        RuntimeManager[F].getHistoryRepo,
-                                        BlockIndex.getBlockIndex[F](_)
-                                      )
-                                      .map(_ -> mScope.conflictScope)
-                                }
+                                for {
+                                  result <- MergeScope
+                                             .merge(
+                                               mScope,
+                                               prevFringeStateHash,
+                                               dag.fringeStates,
+                                               RuntimeManager[F].getHistoryRepo,
+                                               BlockIndex.getBlockIndex[F](_)
+                                             )
+                                } yield result -> mScope.conflictScope
                               }
                               mergeFringe.flatMap {
                                 case result -> cScope =>
@@ -171,7 +157,7 @@ object MultiParentCasper {
       // Merge conflict scope (non-finalized blocks above fringe)
       minGenJs = MergeScope.minGenJs(parentHashes, dag)
       conflictScopeMergeResult <- minGenJs.toSeq match {
-                                   case _ => {
+                                   case _ =>
                                      val (mScope, _) =
                                        MergeScope.fromDag(
                                          parentHashes,
@@ -180,37 +166,21 @@ object MultiParentCasper {
                                          msgMap,
                                          dag.hashLookup.getUnsafe
                                        )
-                                     val checkGenesisCase =
-                                       if (newFringe.isEmpty) {
-                                         // genesis case
-                                         val genesisHash = dag.heightMap.getUnsafe(0).head
-                                         BlockStore[F]
-                                           .getUnsafe(genesisHash)
-                                           .map(
-                                             mScope.copy(
-                                               conflictScope = mScope.conflictScope - genesisHash
-                                             ) -> _.postStateHash.toBlake2b256Hash
-                                           )
-                                       } else (mScope, fringeState).pure
-                                     checkGenesisCase.flatMap {
-                                       case (mScope1, prevFringeStateHash1) =>
-                                         MergeScope
-                                           .merge(
-                                             mScope1,
-                                             prevFringeStateHash1,
-                                             dag.fringeStates,
-                                             RuntimeManager[F].getHistoryRepo,
-                                             BlockIndex.getBlockIndex[F](_)
-                                           )
-                                     }
-                                   }
+                                     MergeScope
+                                       .merge(
+                                         mScope,
+                                         fringeState,
+                                         dag.fringeStates,
+                                         RuntimeManager[F].getHistoryRepo,
+                                         BlockIndex.getBlockIndex[F](_)
+                                       )
                                  }
       (preStateHash, csRejectedDeploys) = conflictScopeMergeResult
 
       csRejectedDeploysStr = PrettyPrinter.buildString(csRejectedDeploys)
       fringeRejectedStr    = PrettyPrinter.buildString(fringeRecord.rejectedDeploys)
       infoMsg = s"Computed parents post state, fringe rejections: $fringeRejectedStr, " +
-        s"rejections: $csRejectedDeploysStr, pre hash $preStateHash"
+        s"rejections: $csRejectedDeploysStr"
       _ <- Log[F].info(infoMsg)
     } yield ParentsMergedState(
       justifications = justifications.toSet,
