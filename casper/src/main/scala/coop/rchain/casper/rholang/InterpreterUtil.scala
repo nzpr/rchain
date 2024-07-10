@@ -134,6 +134,7 @@ object InterpreterUtil {
       val bmd = BlockMetadata
         .fromBlock(block)
         .copy(
+          bondsMap = preState.fringeBondsMap,
           validated = true,
           validationFailed = result.isLeft || !result.toOption.get,
           fringe = preState.fringe,

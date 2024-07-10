@@ -110,7 +110,7 @@ object MergeScope {
       historyRepository: RhoHistoryRepository[F],
       blockIndex: BlockHash => F[BlockIndex],
       rejectionCost: DeployChainIndex => Long = DeployChainIndex.deployChainCost
-  ): F[(Blake2b256Hash, Set[ByteString])] = {
+  ): F[(Blake2b256Hash, Set[ByteString], Set[ByteString])] = {
     // if some indices can be computed - merge is impossible.
     val loadIndices = List(mergeScope.conflictScope, mergeScope.finalScope)
       .traverse(_.toList.traverse(blockIndex).map(_.toSet))
@@ -160,7 +160,11 @@ object MergeScope {
         resolveConflicts.flatMap {
           case (toMerge, rejected) =>
             computeMergedState(toMerge, baseState, historyRepository).map { newState =>
-              (newState, rejected.flatMap(_.deploysWithCost.map(_.id)))
+              (
+                newState,
+                toMerge.flatMap(_.deploysWithCost.map(_.id)),
+                rejected.flatMap(_.deploysWithCost.map(_.id))
+              )
             }
         }
     }
