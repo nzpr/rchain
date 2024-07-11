@@ -470,11 +470,14 @@ class ValidateTest
         result <- {
           implicit val rm = runtimeManager
           for {
-            _               <- InterpreterUtil.validateBlockCheckpointLegacy[IO](genesis)
-            _               <- Validate.bondsCache[IO](genesis) shouldBeF Right(Valid)
-            modifiedBonds   = Map.empty[Validator, Long]
-            modifiedGenesis = genesis.copy(bonds = modifiedBonds)
-            result          <- Validate.bondsCache[IO](modifiedGenesis) shouldBeF Left(InvalidBondsCache)
+            validated          <- InterpreterUtil.validateBlockCheckpoint[IO](genesis)
+            (blockMetadata, _) = validated
+            _                  <- Validate.bondsCache[IO](genesis, blockMetadata) shouldBeF Right(Valid)
+            modifiedBonds      = Map.empty[Validator, Long]
+            modifiedGenesis    = genesis.copy(bonds = modifiedBonds)
+            result <- Validate.bondsCache[IO](modifiedGenesis, blockMetadata) shouldBeF Left(
+                       InvalidBondsCache
+                     )
           } yield result
         }
       } yield result

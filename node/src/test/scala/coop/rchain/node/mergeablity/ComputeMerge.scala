@@ -147,10 +147,11 @@ trait ComputeMerge {
                         )
             kvm      = new InMemoryStoreManager
             dagStore <- BlockDagKeyValueStorage.create[F](kvm)
-            _        <- dagStore.insertLegacy(bBlock, false, approved = true)
-            _        <- dagStore.insertLegacy(lBlock, false)
-            _        <- dagStore.insertLegacy(rBlock, false)
-            dag      <- dagStore.getRepresentation
+            // invalid set to true here because finality is messed up with
+            _   <- dagStore.insertLegacy(bBlock, true, approved = true)
+            _   <- dagStore.insertLegacy(lBlock, true)
+            _   <- dagStore.insertLegacy(rBlock, true)
+            dag <- dagStore.getRepresentation
             indices = Map(
               bBlock.blockHash -> baseIndex,
               rBlock.blockHash -> rightIndex,
@@ -182,7 +183,7 @@ trait ComputeMerge {
                   indices(_: BlockHash).pure,
                   rejectionCost = rejectAlg
                 )
-            (mergedState, toReject) = r
+            (mergedState, _, toReject) = r
             result <- checkFunction(
                        runtime,
                        historyRepo,

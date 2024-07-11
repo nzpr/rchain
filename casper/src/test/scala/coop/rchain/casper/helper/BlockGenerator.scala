@@ -173,7 +173,11 @@ trait BlockGenerator {
       _ <- BlockStore[F].put(block.blockHash, modifiedBlock)
       blockMeta = BlockMetadata
         .fromBlock(modifiedBlock)
-        .copy(validated = true, validationFailed = invalid, fringeStateHash = preStateHash)
+        .copy(
+          validated = true,
+          validationFailed = invalid,
+          fringeStateHash = RuntimeManager.emptyStateHashFixed
+        )
       _ <- BlockDagStorage[F].insert(blockMeta, modifiedBlock)
     } yield modifiedBlock
 

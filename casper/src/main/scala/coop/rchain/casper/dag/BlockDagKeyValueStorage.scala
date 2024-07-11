@@ -96,18 +96,20 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
           rejectedSenders = block.rejectedSenders
         )
         // Save to fringe data store
-        shouldSave <- fringeDataStore.get1(fringeHash).flatMap {
-                       case Some(fd) =>
-                         FatalError(
-                           s"Attempt do add block with equivocating fringe state hash. " +
-                             s"Fringe: ${blockMetadata.fringe.map(_.toHexString.take(6))}, " +
-                             s"persisted: ${fd.stateHash}, " +
-                             s"attempting to add: $metadataStateHash."
-                         ).raiseError
-                           .whenA(fd.stateHash != metadataStateHash)
-                           .as(false)
-                       case None => true.pure
-                     }
+        shouldSave <- (!blockMetadata.validationFailed).pure &&^ fringeDataStore
+                       .get1(fringeHash)
+                       .flatMap {
+                         case Some(fd) =>
+                           FatalError(
+                             s"Attempt do add block with equivocating fringe state hash. " +
+                               s"Fringe: ${blockMetadata.fringe.map(_.toHexString.take(6))}, " +
+                               s"persisted: ${fd.stateHash}, " +
+                               s"attempting to add: $metadataStateHash."
+                           ).raiseError
+                             .whenA(fd.stateHash != metadataStateHash)
+                             .as(false)
+                         case None => true.pure
+                       }
         _ <- fringeDataStore.put(fringeHash, fringeData).whenA(shouldSave)
 
         // Update in-mem indices
