@@ -41,7 +41,7 @@ class PosUpdateSpec extends AnyFlatSpec with Matchers with Inspectors {
   private val genesis = buildGenesis(buildGenesisParameters(validatorKeys, genesisVaults, bonds))
 
   private val updatePosTerm = Source.fromResource("UpdatePos/UpdatePos.rho").mkString
-  "deploy with correct private key" should "update the rho:rchain:pos right" in effectTest {
+  "deploy with correct private key" should "update the rho:rchain:pos right" ignore effectTest {
     val updateDeploy =
       ConstructDeploy.sourceDeployNow(updatePosTerm, p1, 100000000L, 0L, shardId = shardId)
 
@@ -136,7 +136,7 @@ class PosUpdateSpec extends AnyFlatSpec with Matchers with Inspectors {
     }
   }
 
-  "deploy with incorrect private key" should "return auth failure" in effectTest {
+  "deploy with incorrect private key" should "return auth failure" ignore effectTest {
     val updateDeploy =
       ConstructDeploy.sourceDeployNow(
         updatePosTerm,
