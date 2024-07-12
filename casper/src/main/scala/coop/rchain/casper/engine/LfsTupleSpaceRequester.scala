@@ -1,11 +1,10 @@
 package coop.rchain.casper.engine
 
-import cats.effect.{Async, Sync}
+import cats.effect.{Async, Ref, Sync}
 import cats.syntax.all._
 import coop.rchain.casper.protocol._
-import coop.rchain.models.syntax._
 import coop.rchain.rspace.hashing.Blake2b256Hash
-import coop.rchain.rspace.state.RSpaceImporter
+import coop.rchain.rspace.state.{RSpaceExporter, RSpaceImporter}
 import coop.rchain.shared.ByteVectorOps._
 import coop.rchain.shared.syntax._
 import coop.rchain.shared.{Log, Stopwatch}
@@ -14,7 +13,6 @@ import fs2.{Pure, Stream}
 import scodec.bits.ByteVector
 
 import scala.concurrent.duration._
-import cats.effect.{Ref, Temporal}
 
 /**
   * Last Finalized State processor for receiving Rholang state.
@@ -110,6 +108,8 @@ object LfsTupleSpaceRequester {
       ) => F[Unit]
   ): F[Stream[F, ST[StatePartPath]]] = {
 
+    val receivedSIMs = Ref.unsafe(Set.empty[StatePartPath])
+
     def createStream(
         st: Ref[F, ST[StatePartPath]],
         requestQueue: Channel[F, Boolean]
@@ -156,9 +156,24 @@ object LfsTupleSpaceRequester {
         // Mark chunk as received
         isReceived <- Stream.eval(st.modify(_.received(startPath)))
 
+        isReceivedWithOtherRoot <- Stream.eval(receivedSIMs.modify { s =>
+                                    (s + startPath) -> s.contains(startPath)
+                                  })
+        _ <- Stream
+              .eval(
+                Log[F].debug(
+                  s"Short circuiting state fetch on ${startPath.map(RSpaceExporter.pathPretty).mkString(" ")}. " +
+                    s"Already received through another root request."
+                )
+              )
+              .whenA(isReceivedWithOtherRoot)
+
         // Add chunk paths for requesting and trigger request queue (without resend of already requested)
         _ <- Stream
-              .eval(st.update(_.add(Set(lastPath))) >> requestQueue.trySend(false))
+              .eval(
+                st.update(_.add(Set(lastPath))).unlessA(isReceivedWithOtherRoot) >>
+                  requestQueue.trySend(false)
+              )
               .whenA(isReceived)
 
         // Import chunk to RSpace
@@ -248,9 +263,21 @@ object LfsTupleSpaceRequester {
       } yield createStream(st, requestQueue)
     }
 
-    Log[F].info(s"Loading tuple space state for ${states.mkString("; ")}") *>
-      states
-        .traverse(loadState)
-        .map(Stream.emits(_).flatten)
+    states
+      .traverse(loadState)
+      .map(
+        Stream
+          .emits(_)
+          .zipWithIndex
+          .evalMap {
+            case (s, i) =>
+              Log[F]
+                .info(
+                  s"Loading tuple space state for root ${states(i.toInt)} ($i of ${states.size})"
+                )
+                .as(s)
+          }
+          .flatten
+      )
   }
 }

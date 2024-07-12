@@ -1,33 +1,40 @@
 package coop.rchain.casper.engine
 
-import cats.effect.Async
+import cats.effect.kernel.Sync
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all._
 import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.approvedStore.ApprovedStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
+import coop.rchain.casper.merging.{BlockIndex, MergeScope}
 import coop.rchain.casper.protocol.{CommUtil, _}
 import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.syntax._
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
+import coop.rchain.comm.rpc.{BlockIndexEndpoint, RpcCall, RpcMethod, Serialize}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.BlockMetadata
+import coop.rchain.models.Validator.Validator
+import coop.rchain.models.syntax.modelsSyntaxByteString
+import coop.rchain.rholang.interpreter.merging.RholangMergingLogic.{
+  codecMergeableKey,
+  DeployMergeableData,
+  NumberChannel
+}
+import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.{RSpaceImporter, RSpaceStateManager}
-import coop.rchain.shared._
+import coop.rchain.shared.Log
 import coop.rchain.shared.syntax._
 import fs2.concurrent.Channel
+import scodec.bits.ByteVector
 
 import scala.collection.immutable.SortedMap
 import scala.concurrent.duration._
-import cats.effect.{Deferred, Ref, Temporal}
-import coop.rchain.models.Validator.Validator
-import coop.rchain.models.syntax.modelsSyntaxByteString
-import coop.rchain.rspace.hashing.Blake2b256Hash
-import coop.rchain.sdk.dag.View
 
 object NodeSyncing {
 
@@ -103,7 +110,23 @@ class NodeSyncing[F[_]
             _.leftTraverse(
               _ => new Exception("Channel received block message is closed").raiseError[F, Unit]
             ).map(_.merge)
+          ) *>
+        // Save mergeable data
+        {
+          // Key is composed from post-state hash and block creator with seq number
+          val key = (
+            b.postStateHash.toBlake2b256Hash.bytes,
+            ByteVector(b.sender.toByteArray),
+            b.seqNum
           )
+          val keyEncoded = codecMergeableKey.encode(key).require.toByteVector
+          val deployChannels = b.mergeables.map { v =>
+            DeployMergeableData(v.map { case (c, d) => NumberChannel(c, d) }.toSeq)
+          }
+          RuntimeManager[F].getMergeableStore.put(keyEncoded, deployChannels) >> Log[F].info(
+            s"Filled ${b.postStateHash.toHexString}, ${keyEncoded.toHex}"
+          )
+        }
 
     case _ => ().pure
   }
@@ -115,7 +138,7 @@ class NodeSyncing[F[_]
       sender: PeerNode,
       msg: BootstrapDataMessage
   ): F[Unit] = {
-    val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_ == sender))
+    val senderIsBootstrap = RPConfAsk[F].ask.map(_.bootstrap.exists(_.endpoint == sender.endpoint))
 
     def handleApprovedBlock = {
       val fringeLogMsg = s"Received bootstrap data ${msg.show}."
@@ -125,7 +148,8 @@ class NodeSyncing[F[_]
         // Download approved state and all related blocks
         _ <- requestApprovedState(
               msg.tips.toSet,
-              msg.lowerBound.map(x => x.validator -> x.seqNum).toMap
+              msg.lowerBound.map(x => x.validator -> x.seqNum).toMap,
+              msg.finalStateHashes.map(_.toBlake2b256Hash)
             )
 
         // Approved block is saved after the whole state is received,
@@ -165,7 +189,7 @@ class NodeSyncing[F[_]
         TransportLayer[F].sendToBootstrap(
           StoreItemsMessageRequest(statePartPath, 0, pageSize).toProto
         ),
-      requestTimeout = 2.minutes,
+      requestTimeout = 60.seconds,
       RSpaceStateManager[F].importer,
       stateValidator
     )
@@ -173,9 +197,41 @@ class NodeSyncing[F[_]
     Log[F].info(s"Loading ${states.size} states") *> stream.flatMap(_.compile.drain)
   }
 
+  private def requestIndices(indices: List[BlockHash]): F[Unit] = {
+    import coop.rchain.casper.serialize.auto._
+    import coop.rchain.macros.serialize.auto._
+
+    val method  = RpcMethod.apply[BlockHash, BlockIndex](BlockIndexEndpoint)
+    val rpcCall = RpcCall.apply[F, BlockHash, BlockIndex]
+
+    val chRes = for {
+      maybeBootstrap <- Resource.liftK(RPConfAsk[F].reader(_.bootstrap))
+      bootstrap      = maybeBootstrap.get
+      ch <- TransportLayer[F].channel(
+             bootstrap.copy(endpoint = bootstrap.endpoint.copy(tcpPort = 40406))
+           )
+    } yield ch
+
+    Log[F].info(s"Requesting block indices") *>
+      chRes.use { ch =>
+        indices.foldLeftM(0) { (acc, h) =>
+          rpcCall
+            .invoke(method, h, ch)
+            .flatTap { i =>
+              Log[F].info(
+                s"Fetched block index for ${i.blockHash.toHexString.take(8)} ($acc/${indices.size - 1})"
+              ) *>
+                Sync[F].delay(BlockIndex.cache += (i.blockHash -> i))
+            }
+            .as(acc + 1)
+        }
+      }.void
+  }
+
   def requestApprovedState(
       lms: Set[BlockHash],
-      edge: Map[Validator, Long]
+      edge: Map[Validator, Long],
+      finalStateHashes: List[Blake2b256Hash]
   ): F[Unit] =
     for {
       // Request all blocks for Last Finalized State
@@ -184,8 +240,8 @@ class NodeSyncing[F[_]
                              edge,
                              incomingBlocksQueue.stream,
                              MultiParentCasper.deployLifespan,
-                             hash => CommUtil[F].broadcastRequestForBlock(hash, 1.some),
-                             requestTimeout = 30.seconds,
+                             hash => CommUtil[F].broadcastRequestForBlock(hash, 10.some),
+                             requestTimeout = 3.seconds,
                              BlockStore[F].contains(_),
                              BlockStore[F].getUnsafe,
                              BlockStore[F].put(_, _),
@@ -196,19 +252,20 @@ class NodeSyncing[F[_]
       blockRequestAddDagStream = blockRequestStream.last.unNoneTerminate.evalMap { st =>
         populateDag(st.heightMap) *>
           Log[F].info(s"Blocks for LFS received and added to the state.") *>
-          fs2.Stream
-            .emits(st.heightMap.values.flatten.toList.distinct)
-            .evalMap(
-              BlockStore[F]
-                .getUnsafe(_)
-                .map(b => List(b.finStateHash, b.preStateHash, b.postStateHash))
-            )
-            .flatMap(fs2.Stream.emits)
-            .map(_.toBlake2b256Hash)
-            .compile
-            .to(Set)
-            .flatMap(x => requestStates(x.toList)) *>
-          Log[F].info(s"States for LFS received and imported.")
+          requestStates(finalStateHashes) *> fs2.Stream
+          .emits(st.heightMap.values.flatten.toList.distinct)
+          .evalMap(BlockStore[F].getUnsafe)
+          // filter out blocks that had to be pulled just to have data to protect from replay attack
+          // (deployLifespan related)
+          // TODO for some reason once it was observed that this is not enough when syncing to
+          //  the network with huge conflict set (1 block index was missing), so -5 is added
+          //  but it should be enough so find out why it's not enough
+          .collect { case b if b.seqNum >= edge.getUnsafe(b.sender) - 5 => b.blockHash }
+          .compile
+          .toList
+          .flatMap(requestIndices) *>
+          Log[F].info(s"Blocks, states and indices for LFS are received and imported.")
+
       }
       _ <- blockRequestAddDagStream.compile.drain
 

@@ -2,6 +2,7 @@ package coop.rchain.crypto.util
 
 import coop.rchain.crypto.hash.Keccak256
 import coop.rchain.sdk.syntax.all._
+import coop.rchain.sdk.syntax.primitive.sdkSyntaxTry
 import coop.rchain.shared.Base16
 import org.bouncycastle.asn1._
 import org.bouncycastle.util.BigIntegers

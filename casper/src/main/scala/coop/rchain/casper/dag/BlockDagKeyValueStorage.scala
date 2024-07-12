@@ -3,7 +3,7 @@ package coop.rchain.casper.dag
 import cats.effect.std.Semaphore
 import cats.effect.{Async, Ref, Sync}
 import cats.syntax.all._
-import cats.{Applicative, Monad, Show}
+import cats.{Monad, Show}
 import coop.rchain.blockstorage._
 import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.blockstorage.dag._
@@ -11,7 +11,7 @@ import coop.rchain.blockstorage.dag.codecs._
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.casper.dag.BlockDagKeyValueStorage._
 import coop.rchain.casper.merging.BlockIndex
-import coop.rchain.casper.protocol.{BlockMessage, DeployData, ProposeSlot}
+import coop.rchain.casper.protocol.{BlockMessage, DeployData}
 import coop.rchain.casper.{MultiParentCasper, PrettyPrinter}
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.metrics.Metrics.Source
@@ -85,109 +85,149 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         //        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
         //        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
         //        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
+        metadataStateHash = blockMetadata.fringeStateHash.toBlake2b256Hash
         fringeData = FringeData(
           fringeHash,
           fringe = blockMetadata.fringe,
           //fringeDiff = fringeDiffHashes,
-          stateHash = blockMetadata.fringeStateHash.toBlake2b256Hash,
+          stateHash = metadataStateHash,
           rejectedDeploys = block.rejectedDeploys,
           rejectedBlocks = block.rejectedBlocks,
           rejectedSenders = block.rejectedSenders
         )
         // Save to fringe data store
-        _ <- fringeDataStore.put(fringeHash, fringeData)
+        shouldSave <- (!blockMetadata.validationFailed).pure &&^ fringeDataStore
+                       .get1(fringeHash)
+                       .flatMap {
+                         case Some(fd) =>
+                           FatalError(
+                             s"Attempt do add block with equivocating fringe state hash. " +
+                               s"Fringe: ${blockMetadata.fringe.map(_.toHexString.take(6))}, " +
+                               s"persisted: ${fd.stateHash}, " +
+                               s"attempting to add: $metadataStateHash."
+                           ).raiseError
+                             .whenA(fd.stateHash != metadataStateHash)
+                             .as(false)
+                         case None => true.pure
+                       }
+        _ <- fringeDataStore.put(fringeHash, fringeData).whenA(shouldSave)
 
         // Update in-mem indices
         dag      <- representationState.get
         dagState = dag.dagMessageState
 
-        // Blocks that no more required to process any future message
-        garbage <- if (!isSync) {
-                    // attempt to prune only when sender is the only outsider
-                    // (this means all justifications already advanced the fringe compared to self justification)
-                    // so no new valid (non equivocating) messages will reference what is about to be pruned
-                    val lowestFringe = dagState.msgMap.lowestFringe(dagState.latestMsgs).map(_.id)
-                    val outsiders =
-                      dagState.latestMsgs.filter(_.fringe == lowestFringe).map(_.sender)
-                    val shouldPrune = outsiders == Set(blockMetadata.sender)
-                    if (shouldPrune)
-                      executeGC(
-                        dag.dagMessageState,
-                        dagState,
-                        dag.childMap,
-                        (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head
-                      )
-                    else
-                      Set.empty[BlockHash].pure
-                  } else
-                    Set.empty[BlockHash].pure
+        r <- representationState.modify { dr =>
+              // Update DAG messages state
+              val dagMsgSt = dr.dagMessageState
+              val msg      = messageFromBlockMetadata(blockMetadata)
 
-        dag <- representationState.updateAndGet { dr =>
-                // Update DAG messages state
-                val dagMsgSt = dr.dagMessageState
-                val msg      = messageFromBlockMetadata(blockMetadata)
-                val newDagMsgState = {
-                  val neu = dagMsgSt.insertMsg(msg)
-                  neu.copy(msgMap = neu.msgMap -- garbage)
-                }
-
-                val newHashLookup = {
-                  val neu = dr.hashLookup.updated(
-                    (msg.sender, msg.senderSeq),
-                    dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
-                  )
-                  // TODO handle equivocations
-                  val gc = garbage
-                    .map(dr.dagMessageState.msgMap)
-                    .map(x => x.sender -> x.senderSeq)
-                  neu -- gc
-                }
-
-                // Update fringe data cache
-                // TODO: remove out of reach records (not needed for further finalization)
-                val newFringes = {
-                  val neu = dr.fringeStates + ((msg.fringe, fringeData))
-                  val gc  = garbage.map(dr.dagMessageState.msgMap(_).fringe)
-                  neu -- gc
-                }
-
-                val newDagSet = {
-                  val neu = dr.dagSet + msg.id
-                  neu -- garbage
-                }
-
-                val newChildMap = {
-                  val neu = msg.parents.foldLeft(dr.childMap) {
-                    case (acc, p) =>
-                      acc.updated(p, acc.get(p).map(_ + msg.id).getOrElse(Set(msg.id)))
-                  }
-                  neu -- garbage
-                }
-
-                val newHeightMap = {
-                  val neu = dr.heightMap.updated(
-                    msg.height,
-                    dr.heightMap.get(msg.height).map(_ + msg.id).getOrElse(Set(msg.id))
-                  )
-                  garbage.map(dagMsgSt.msgMap.getUnsafe(_)).foldLeft(neu) {
-                    case (acc, m) =>
-                      acc.updated(
-                        m.height,
-                        acc.get(m.height).map(_ - m.id).getOrElse(Set())
-                      )
-                  }
-                }
-
-                // Updated DagRepresentation
-                dr.copy(
-                  newDagSet,
-                  newChildMap,
-                  newHeightMap,
-                  newDagMsgState,
-                  fringeStates = newFringes,
-                  hashLookup = newHashLookup
-                )
+              val newDagMsgState = dagMsgSt.insertMsg(msg)
+              val newHashLookup = dr.hashLookup.updated(
+                (msg.sender, msg.senderSeq),
+                dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
+              )
+              val newFringes = dr.fringeStates + ((msg.fringe, fringeData))
+              val newDagSet  = dr.dagSet + msg.id
+              val newChildMap = msg.parents.foldLeft(dr.childMap) {
+                case (acc, p) => acc.updated(p, acc.get(p).map(_ + msg.id).getOrElse(Set(msg.id)))
               }
+              val newHeightMap = dr.heightMap.updated(
+                msg.height,
+                dr.heightMap.get(msg.height).map(_ + msg.id).getOrElse(Set(msg.id))
+              )
+              // Updated DagRepresentation
+              val newDag = dr.copy(
+                newDagSet,
+                newChildMap,
+                newHeightMap,
+                newDagMsgState,
+                newFringes,
+                newHashLookup
+              )
+
+              // Blocks that no more required to process any future message
+              val garbage = if (!isSync) {
+                // attempt to prune only when sender is the only outsider
+                // (this means all justifications already advanced the fringe compared to self justification)
+                // so no new valid (non equivocating) messages will reference what is about to be pruned
+                val isNewFringe = blockMetadata.fringe !=
+                  dagMsgSt.latestMsgs
+                    .find(_.sender == blockMetadata.sender)
+                    .map(_.fringe)
+                    .getOrElse(Set())
+
+                lazy val oldLowestFringe =
+                  dag.dagMessageState.msgMap.lowestFringe(dagState.latestMsgs).map(_.id)
+                lazy val outsiders =
+                  dag.dagMessageState.latestMsgs.filter(_.fringe == oldLowestFringe).map(_.sender)
+
+                val shouldPrune = isNewFringe && (outsiders == Set(blockMetadata.sender))
+
+//                println(
+//                  s"outsiders ${(outsiders == Set(blockMetadata.sender))} newFringe $isNewFringe"
+//                )
+
+                if (shouldPrune) {
+                  val x = executeGC(
+                    newDag.dagMessageState,
+                    dag.dagMessageState,
+                    newDag.childMap,
+                    (v, sN) => newDag.hashLookup.getUnsafe(v -> sN).head
+                  )
+//                  println(
+//                    s"Garbage: ${x.map(_.toHexString.take(8))} blocks, new index size: ${BlockIndex.cache.size - x.size}"
+//                  )
+                  x
+                } else
+                  Set.empty[BlockHash]
+              } else
+                Set.empty[BlockHash]
+
+              val gcDagMsgState = newDagMsgState.copy(msgMap = newDagMsgState.msgMap -- garbage)
+              val gcHashLookup = {
+                // TODO handle equivocations
+                val gc = garbage
+                  .map(dr.dagMessageState.msgMap)
+                  .map(x => x.sender -> x.senderSeq)
+                newHashLookup -- gc
+              }
+              // Update fringe data cache
+              // TODO: remove out of reach records (not needed for further finalization)
+              val gcFringes = {
+                val gc = garbage.map(dr.dagMessageState.msgMap(_).fringe)
+                newFringes -- gc
+              }
+              val gcDagSet   = newDagSet -- garbage
+              val gcChildMap = newChildMap -- garbage
+              val gcHeightMap = {
+                garbage.map(dagMsgSt.msgMap.getUnsafe(_)).foldLeft(newHeightMap) {
+                  case (acc, m) =>
+                    acc.updated(
+                      m.height,
+                      acc.get(m.height).map(_ - m.id).getOrElse(Set())
+                    )
+                }
+              }
+              val gcDag = newDag.copy(
+                gcDagSet,
+                gcChildMap,
+                gcHeightMap,
+                gcDagMsgState,
+                gcFringes,
+                gcHashLookup
+              )
+
+              (gcDag, (gcDag, garbage))
+            }
+
+        (dag, garbage) = r
+
+        // Delete garbage from other stores
+        _ = garbage.toList.foreach(BlockIndex.cache.remove)
+        _ <- lfsSetStore.delete(garbage.toList)
+        _ <- Log[F].info(
+              s"Pruning ${garbage.size} blocks, new LFS set size ${BlockIndex.cache.size}"
+            )
 
         _ <- removeExpiredFromPool(deployStore, dag).map(
               _.map((_, ())).foreach((expiredMap.update _).tupled)
@@ -220,17 +260,13 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
       curState: DagMessageState[BlockHash, Validator],
       childMap: Map[BlockHash, Set[BlockHash]],
       lookup: (Validator, Long) => BlockHash
-  ): F[Set[BlockHash]] = {
+  ): Set[BlockHash] = {
     val newLPF = dbPruneFringe(newState, childMap)
     val curLPF = dbPruneFringe(curState, childMap)
-    val toPrune = newState.msgMap.between(newLPF.map(_.id), curLPF.map(_.id), lookup, IncludeBottom) ++
-      curLPF.map(_.id)
-
-    Sync[F].delay(toPrune.toList.foreach(BlockIndex.cache.remove)) *>
-      lfsSetStore.delete(toPrune.toList) *>
-      Log[F]
-        .info(s"Pruned ${toPrune.size} blocks, new index size: ${BlockIndex.cache.size}")
-        .as(toPrune)
+    if (newLPF == curLPF)
+      Set.empty[BlockHash]
+    else
+      newState.msgMap.between(newLPF.map(_.id), curLPF.map(_.id), lookup, IncludeBottom)
   }
 
   override def lookup(blockHash: BlockHash): F[Option[BlockMetadata]] =
@@ -253,23 +289,24 @@ object BlockDagKeyValueStorage {
   implicit private val BlockDagKeyValueStorage_FromFileMetricsSource: Source =
     Metrics.Source(BlockStorageMetricsSource, "dag-key-value-store")
 
-  def lowerBound[F[_]: BlockDagStorage: Applicative]: F[Set[ProposeSlot]] =
-    BlockDagStorage[F].getRepresentation.map { dag =>
-      val x = dbPruneFringe(dag.dagMessageState, dag.childMap)
-        .map(m => ProposeSlot(m.sender, m.senderSeq))
-      if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
-    }
-
   /**
     * Fringe messages below which (+ messages of the fringe) can be pruned since they are not
     * required for processing of any future message.
+    *
+    * Returns prune fringe and lowest fringe across messages of latest fringe in the view.
     */
   def dbPruneFringe(
       dbState: DagMessageState[BlockHash, Validator],
       childMap: Map[BlockHash, Set[BlockHash]]
   ): Set[Message[BlockHash, Validator]] = {
-    val lowestFringe = dbState.msgMap.lowestFringe(dbState.latestMsgs).map(_.id)
-    dbState.msgMap.pruneFringe(lowestFringe, childMap)
+    // Lowest fringe seen by latest messages
+    val lowestFringe = dbState.msgMap.lowestFringe(dbState.latestMsgs)
+    // Lowest fringe seen by messages of a fringe
+    val lowestFringe2 = dbState.msgMap.lowestFringe(lowestFringe)
+    // Prune fringe required to merge anything that has lowestFringe2 as a lower boundary
+    // Anything below can be discarded and all future messages on top of dbState still can be processed
+    dbState.msgMap.lowestFringe(lowestFringe2)
+//    dbState.msgMap.pruneFringe(lowestFringe2.map(_.id), childMap)
   }
 
   private final case class DagStores[F[_]](

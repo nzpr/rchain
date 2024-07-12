@@ -4,8 +4,7 @@ import cats.Eval
 import cats.syntax.all._
 import coop.rchain.models.rholangn._
 import coop.rchain.models.rholangn.parmanager.Constants._
-import coop.rchain.models.rholangn.parmanager.primitive.{PrimitiveReader, PrimitiveWriter}
-
+import coop.rchain.sdk.serialize.{PrimitiveReader, PrimitiveWriter}
 object Serialization {
 
   /**

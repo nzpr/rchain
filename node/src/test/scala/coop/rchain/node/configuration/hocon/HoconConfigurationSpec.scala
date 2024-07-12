@@ -51,7 +51,7 @@ class HoconConfigurationSpec extends AnyFunSuite with Matchers {
         dynamicIp = false,
         noUpnp = false,
         port = 40400,
-        grpcMaxRecvMessageSize = 262144,
+        grpcMaxRecvMessageSize = 8290304,
         grpcMaxRecvStreamMessageSize = 268435456,
         maxMessageConsumers = 400,
         disableStateExporter = false
@@ -67,7 +67,7 @@ class HoconConfigurationSpec extends AnyFunSuite with Matchers {
         disableLfs = false,
         batchMaxConnections = 20,
         networkTimeout = 5.seconds,
-        grpcMaxRecvMessageSize = 262144,
+        grpcMaxRecvMessageSize = 8290304,
         grpcStreamChunkSize = 262144
       ),
       peersDiscovery = PeersDiscovery(
@@ -108,8 +108,8 @@ class HoconConfigurationSpec extends AnyFunSuite with Matchers {
         validatorPrivateKey = None,
         validatorPrivateKeyPath = None,
         shardName = "root",
-        casperLoopInterval = 30.seconds,
-        requestedBlocksTimeout = 240.seconds,
+        casperLoopInterval = 4.seconds,
+        requestedBlocksTimeout = 20.seconds,
         maxNumberOfParents = 2147483647,
         forkChoiceStaleThreshold = 10.minutes,
         forkChoiceCheckIfStaleInterval = 11.minutes,

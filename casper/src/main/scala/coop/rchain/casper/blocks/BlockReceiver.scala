@@ -15,6 +15,7 @@ import coop.rchain.shared.syntax._
 import fs2.Stream
 import fs2.concurrent.Channel
 import cats.effect.Ref
+import coop.rchain.models.syntax.modelsSyntaxByteString
 
 sealed trait RecvStatus
 // Begin checking and storing block
@@ -60,11 +61,9 @@ final case class BlockReceiverState[MId: Show] private (
     *  - thread safe sync like opening transaction for a block by block hash
     */
   def beginStored(id: MId): (BlockReceiverState[MId], Boolean) = {
-    // If state is not known or pending request, it's expected so continue with receiving
-    val alreadyStored = blocksSt.contains(id)
     val expectedReceive =
       receiveSt.get(id).collect { case Requested => true; case _ => false }.getOrElse(true)
-    if (expectedReceive && !alreadyStored) {
+    if (expectedReceive) {
       // Update state to begin received status
       val newReceiveSt = receiveSt + ((id, BeginStoreBlock))
       (copy(receiveSt = newReceiveSt), true)
@@ -77,30 +76,27 @@ final case class BlockReceiverState[MId: Show] private (
     * Storing of block done, waiting validation
     *  - like closing transaction, block stored and waiting validation
     *
-    *  @return unseen parent dependencies
+    *  @return toRequest parent dependencies that will be requested
     */
-  def endStored(id: MId, parents: List[(MId, Boolean)]): (BlockReceiverState[MId], Set[MId]) = {
+  def endStored(id: MId, lockingDeps: Set[MId]): (BlockReceiverState[MId], Set[MId]) = {
     val curStateOpt = receiveSt.get(id)
     assert(
       curStateOpt == BeginStoreBlock.some,
-      s"Received should be called only in begin received state, actual: $curStateOpt, hash: $id"
+      s"EndStored should be called only in begin stored state, actual: $curStateOpt, hash: $id"
     )
     curStateOpt
       .collect {
         case BeginStoreBlock =>
           // Update blocks state, keep unseen parents only
-          val parentsNotStored = parents.filter(_._2).map(_._1).toSet
-          val unseenParents    = parentsNotStored -- blocksSt.keySet -- receiveSt.keySet - id
-          val newBlocksSt      = blocksSt + ((id, parents.map(_._1).toSet))
+          val newBlocksSt = blocksSt + ((id, lockingDeps))
 
           // Update block status to received and set unseen parents to Pending receive state
           val newReceiveStored  = receiveSt + ((id, EndStoreBlock))
-          val newPendingReceive = unseenParents.map((_, Requested))
+          val newPendingReceive = (lockingDeps -- receiveSt.keys).map((_, Requested))
           val newReceiveSt      = newReceiveStored ++ newPendingReceive
 
           // Update children relations of received block
-          val parentIds = parents.map(_._1)
-          val newChildRelations = parentIds.foldLeft(childRelations) {
+          val newChildRelations = lockingDeps.foldLeft(childRelations) {
             case (acc, parent) =>
               val childs = acc.getOrElse(parent, Set())
               acc + ((parent, childs + id))
@@ -113,7 +109,7 @@ final case class BlockReceiverState[MId: Show] private (
             childRelations = newChildRelations
           )
 
-          (newState, unseenParents)
+          (newState, lockingDeps)
       }
       // TODO: this should never happen, protected by assert
       //  (maybe we need helper function to wrap the whole pattern or return error to caller (effect))
@@ -182,10 +178,10 @@ final case class BlockReceiverState[MId: Show] private (
 object BlockReceiver {
   def apply[F[_]: Async: BlockStore: BlockDagStorage: BlockRetriever: Log](
       state: Ref[F, BlockReceiverState[BlockHash]],
-      incomingBlocksStream: Stream[F, BlockMessage],
-      finishedProcessingStream: Stream[F, BlockMessage],
+      incomingStream: Stream[F, BlockMessage],
+      validatedStream: Stream[F, BlockMessage],
       confShardName: String,
-      putToIncomingQueue: BlockMessage => F[Unit]
+      receive: BlockMessage => F[Unit] // loopback call to pass block to the input of the receiver
   ): F[Stream[F, BlockHash]] = {
 
     def blockStr(b: BlockMessage) = PrettyPrinter.buildString(b, short = true)
@@ -221,79 +217,67 @@ object BlockReceiver {
     }
 
     // Check if block should be stored
-    def checkIfKnown(b: BlockMessage, dag: DagRepresentation): F[Boolean] =
-      Sync[F].delay(dag.contains(b.blockHash))
+//    def checkIfKnown(b: BlockMessage, dag: DagRepresentation): F[Boolean] =
+//      Sync[F].delay(dag.contains(b.blockHash))
     //dag.heightMap.headOption.map(_._1).getOrElse(-1L) > b.blockNumber
 
-    def requestMissingDependencies(deps: Set[BlockHash]): F[Unit] =
-      deps.toList.traverse_(
+    def requestMissingDependencies(deps: Seq[BlockHash]): F[Unit] =
+      deps.traverse_(
         BlockRetriever[F].admitHash(_, admitHashReason = BlockRetriever.MissingDependencyRequested)
       )
 
-    def sendToValidate(hashes: List[BlockHash]): F[Unit] = hashes.traverse_ { hash =>
-      BlockStore[F].getUnsafe(hash).flatMap(putToIncomingQueue)
-    }
+    implicit val hashShow: Show[BlockHash] = Show.show[BlockHash](_.toHexString)
 
     // Process incoming blocks
     def incomingBlocks(receiverOutputQueue: Channel[F, BlockHash]) =
-      incomingBlocksStream
+      incomingStream
         .evalFilterAsyncUnorderedProcBounded { block =>
           // Filter (ignore) blocks that are not of interest (pass integrity check, incorrect shard or version, ...)
           checkIfOfInterest(block).flatTap(logMalformed(block).unlessA(_))
         }
         .parEvalMapUnorderedProcBounded { block =>
-          // Start block checking, mark begin of checking in the state (begin received "transaction")
-          val shouldCheck = state.modify(_.beginStored(block.blockHash))
           // Save block to store, mark end of checking in the state (end received "transaction")
-          def markReceivedAndStore(dag: DagRepresentation) =
+          def markReceivedAndStore: F[Unit] =
             for {
-              // Save block to block store, resolve parents to request
+              // Save block to block store
+              // notify BlockRetriever that block is received
               blockStored <- BlockStore[F].contains(block.blockHash)
-              _           <- BlockStore[F].put(block).unlessA(blockStored)
+              _ <- (BlockStore[F].put(block) *> BlockRetriever[F].ackReceived(block.blockHash))
+                    .unlessA(blockStored)
 
-              parents <- block.justifications
-                          .traverse { hash =>
-                            BlockStore[F].contains(hash).not.map((hash, _))
-                          }
-              pendingRequests <- state.modify(
-                                  _.endStored(
-                                    block.blockHash,
-                                    parents.filterNot(x => dag.contains(x._1))
-                                  )
-                                )
+              parents = block.justifications
 
-              // Notify BlockRetriever of finished validation of block
-              _ <- BlockRetriever[F].ackReceived(block.blockHash)
+              // parents to request
+              toRequest <- BlockStore[F].getMissing(parents).flatTap(requestMissingDependencies)
 
-              // Check if block have all dependencies in the DAG
-              hasAllDeps = block.justifications.forall(dag.contains)
+              // get latest validated state
+              dag <- BlockDagStorage[F].getRepresentation
 
-              // If replay was interrupted, block was stored but not validated or added to the DAG.
-              // Validation needs to be restarted for such blocks
-              parentsToValidate <- block.justifications.filterA(notValidated[F])
+              validated = dag.contains(block.blockHash)
 
-              _ <- if (hasAllDeps) {
-                    receiverOutputQueue.trySend(block.blockHash)
-                  } else {
-                    requestMissingDependencies(pendingRequests).whenA(pendingRequests.nonEmpty) *>
-                      sendToValidate(parentsToValidate).whenA(parentsToValidate.nonEmpty)
-                  }
+              // add block to state specifying locking dependencies
+              lockingDependencies = parents.toSet -- dag.dagSet
+              _                   <- state.modify(_.endStored(block.blockHash, lockingDependencies))
+
+              // dangling dependencies are sent back to the input of the receiver since they are stored already
+              // but not in the dag
+              danglingDependencies = lockingDependencies -- toRequest
+              _ <- BlockStore[F]
+                    .get(danglingDependencies.toList)
+                    .flatMap(_.flatten.traverse(receive))
+
+              // send hash that has no locking dependencies to the output
+              _ <- receiverOutputQueue
+                    .trySend(block.blockHash)
+                    .whenA(lockingDependencies.isEmpty && !validated)
             } yield ()
 
-          for {
-            // get dag snapshot
-            dag          <- BlockDagStorage[F].getRepresentation
-            isOfInterest <- checkIfKnown(block, dag).not &&^ shouldCheck
-            // Log if block is ignored
-            _ <- logNotOfInterest(block).unlessA(isOfInterest)
-            // Save to store if block is of interest and send request for missing dependencies
-            _ <- markReceivedAndStore(dag).whenA(isOfInterest)
-          } yield ()
+          state.modify(_.beginStored(block.blockHash)).ifM(markReceivedAndStore, ().pure)
         }
 
     // Process validated blocks
     def validatedBlocks(receiverOutputQueue: Channel[F, BlockHash]) =
-      finishedProcessingStream.parEvalMapUnorderedProcBounded { block =>
+      validatedStream.parEvalMapUnorderedProcBounded { block =>
         val parents = block.justifications.toSet
         for {
           // Update state with finalized block and get next for validation
@@ -309,7 +293,4 @@ object BlockReceiver {
       outQueue.stream concurrently incomingBlocks(outQueue) concurrently validatedBlocks(outQueue)
     }
   }
-
-  def notValidated[F[_]: Async: BlockStore: BlockDagStorage](hash: BlockHash): F[Boolean] =
-    BlockStore[F].contains(hash) &&^ BlockDagStorage[F].getRepresentation.map(!_.contains(hash))
 }

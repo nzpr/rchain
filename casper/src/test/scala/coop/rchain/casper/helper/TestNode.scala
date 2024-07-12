@@ -110,9 +110,9 @@ case class TestNode[F[_]: Async](
           }
       r <- v match {
             case ProposerSuccess(_, b) => b.blockHash.pure[F]
-            case _ =>
+            case e =>
               Sync[F]
-                .raiseError(new Exception("Propose failed or another in progress"))
+                .raiseError(new Exception(s"Propose failed: $e"))
                 .as(ByteString.EMPTY)
           }
     } yield r
@@ -431,7 +431,7 @@ object TestNode {
 
                  proposer = validatorId match {
                    case Some(vi) =>
-                     Proposer[F](vi, shardName, minPhloPrice, Int.MaxValue).some
+                     Proposer[F](vi, shardName, minPhloPrice, Int.MaxValue, None, Log.log[F]).some
                    case None => None
                  }
                  // propose function in casper tests is always synchronous

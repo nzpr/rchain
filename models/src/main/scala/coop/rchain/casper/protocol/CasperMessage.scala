@@ -142,7 +142,8 @@ final case class BlockMessage(
     sigAlgorithm: String,
     sig: ByteString,
     view: View[Validator],
-    fringe: List[BlockHash]
+    fringe: List[BlockHash],
+    mergeables: Seq[Map[Blake2b256Hash, Long]] // TODO this should not be on a block?
 ) extends CasperMessage {
   def toProto: BlockMessageProto = BlockMessage.toProto(this)
 
@@ -173,7 +174,11 @@ object BlockMessage {
       bm.sigAlgorithm,
       bm.sig,
       View(bm.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
-      bm.fringe
+      bm.fringe,
+      bm.mergeables.map {
+        case DeploysChannelDiff(x) =>
+          x.map { case ChannelDiffs(c, d) => c.toBlake2b256Hash -> d }.toMap
+      }
     )
 
   def toProto(bm: BlockMessage): BlockMessageProto = {
@@ -211,6 +216,11 @@ object BlockMessage {
       )
       .withFringe(bm.fringe)
       .withFinStateHash(bm.finStateHash)
+      .withMergeables(bm.mergeables.map { x =>
+        DeploysChannelDiff(x.map {
+          case (c, d) => ChannelDiffs.apply(c.toByteString, d)
+        }.toList)
+      }.toList)
   }
 
 }
@@ -545,7 +555,8 @@ object ProposeSlot {
 
 final case class BootstrapDataMessage(
     tips: Seq[BlockHash],
-    lowerBound: Set[ProposeSlot]
+    lowerBound: Set[ProposeSlot],
+    finalStateHashes: List[ByteString]
 ) extends CasperMessage {
   override def toProto: BootstrapDataProto = BootstrapDataMessage.toProto(this)
 }
@@ -554,18 +565,21 @@ object BootstrapDataMessage {
   def from(x: BootstrapDataProto): BootstrapDataMessage =
     BootstrapDataMessage(
       x.tips,
-      x.lowerBound.map(ProposeSlot.from).toSet
+      x.lowerBound.map(ProposeSlot.from).toSet,
+      x.finalStateHashes.toList
     )
   def toProto(x: BootstrapDataMessage): BootstrapDataProto =
     BootstrapDataProto(
       x.tips,
-      x.lowerBound.map(ProposeSlot.toProto).toSeq
+      x.lowerBound.map(ProposeSlot.toProto).toSeq,
+      x.finalStateHashes
     )
 
   implicit def showFF: Show[BootstrapDataMessage] = new Show[BootstrapDataMessage] {
     override def show(t: BootstrapDataMessage): String =
       s"tips: ${t.tips.map(_.toHexString.take(8))}, lowerBound: ${t.lowerBound
-        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}"
+        .map(x => x.validator.toHexString.take(8) -> x.seqNum)}, finalStateHashes: ${t.finalStateHashes
+        .map(_.toBlake2b256Hash)}"
   }
 }
 

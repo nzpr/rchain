@@ -7,12 +7,14 @@ import coop.rchain.casper.genesis.contracts._
 import coop.rchain.casper.protocol._
 import coop.rchain.casper.rholang.{BlockRandomSeed, RuntimeManager}
 import coop.rchain.casper.rholang.RuntimeManager.StateHash
+import coop.rchain.casper.syntax.casperSyntaxRuntimeManager
 import coop.rchain.casper.util.ProtoUtil.unsignedBlockProto
 import coop.rchain.casper.{PrettyPrinter, ValidatorIdentity}
 import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.models.BlockVersion
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
+import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.sdk.dag.View
 
 final case class Genesis(
@@ -68,23 +70,33 @@ object Genesis {
     val rand      = BlockRandomSeed.randomGenerator(genesis.shardId)
     RuntimeManager[F]
       .computeGenesis(blessedTerms, rand, blockData)
-      .map {
+      .flatMap {
         case (startHash, stateHash, processedDeploys) =>
-          val unsignedBlock =
-            createBlockWithProcessedDeploys(genesis, startHash, stateHash, processedDeploys)
-          // Sign a block (hash should not be changed)
-          val signedBlock = validator.signBlock(unsignedBlock)
+          RuntimeManager[F]
+            .loadMergeableChannels(stateHash, blockData.sender.bytes, blockData.seqNum)
+            .map { mergeables =>
+              val unsignedBlock =
+                createBlockWithProcessedDeploys(
+                  genesis,
+                  startHash,
+                  stateHash,
+                  processedDeploys,
+                  mergeables
+                )
+              // Sign a block (hash should not be changed)
+              val signedBlock = validator.signBlock(unsignedBlock)
 
-          // This check is temporary until signing function will re-hash the block
-          val unsignedHash = PrettyPrinter.buildString(unsignedBlock.blockHash)
-          val signedHash   = PrettyPrinter.buildString(signedBlock.blockHash)
-          assert(
-            unsignedBlock.blockHash == signedBlock.blockHash,
-            s"Signed block has different block hash unsigned: $unsignedHash, signed: $signedHash."
-          )
+              // This check is temporary until signing function will re-hash the block
+              val unsignedHash = PrettyPrinter.buildString(unsignedBlock.blockHash)
+              val signedHash   = PrettyPrinter.buildString(signedBlock.blockHash)
+              assert(
+                unsignedBlock.blockHash == signedBlock.blockHash,
+                s"Signed block has different block hash unsigned: $unsignedHash, signed: $signedHash."
+              )
 
-          // Return signed genesis block
-          signedBlock
+              // Return signed genesis block
+              signedBlock
+            }
       }
   }
 
@@ -92,7 +104,8 @@ object Genesis {
       genesis: Genesis,
       preStateHash: StateHash,
       postStateHash: StateHash,
-      processedDeploys: Seq[ProcessedDeploy]
+      processedDeploys: Seq[ProcessedDeploy],
+      mergeables: Seq[Map[Blake2b256Hash, Long]]
   ): BlockMessage = {
     // Ensure that all deploys are successfully executed
     assert(processedDeploys.forall(!_.isFailed), s"Genesis block contains failed deploys.")
@@ -116,7 +129,8 @@ object Genesis {
       rejectedDeploys = Set.empty,
       state = state,
       view = View.semigroupDagSeen.empty,
-      fringe = List.empty
+      fringe = List.empty,
+      mergeables
     )
   }
 

@@ -29,7 +29,8 @@ package object discovery {
         )
         .build
 
-      Resource.make(Sync[F].delay(server.start))(s => Sync[F].delay(s.shutdown.void()))
+      Resource
+        .make(Sync[F].delay(server.start))(s => Sync[F].delay(s.shutdown.awaitTermination().void()))
     }
 
   def toPeerNode(n: Node): PeerNode =

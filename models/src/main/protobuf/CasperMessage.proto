@@ -27,6 +27,7 @@ message BootstrapDataProto {
   option (scalapb.message).extends = "CasperMessageProto";
   repeated bytes tips = 1;
   repeated ProposeSlotProto lowerBound = 2;
+  repeated bytes finalStateHashes = 3;
 }
 
 message ProposeSlotProto {
@@ -75,6 +76,15 @@ message BlockHashMessageProto {
   bytes  blockCreator = 2;
 }
 
+message DeploysChannelDiff {
+  repeated ChannelDiffs deployChannelDiffs= 1;
+}
+
+message ChannelDiffs {
+  bytes channel = 1;
+  uint64 diff = 2;
+}
+
 // --------- Core Protocol  --------
 
 message BlockMessageProto {
@@ -103,6 +113,8 @@ message BlockMessageProto {
   repeated           ViewProto view = 17 [(scalapb.field).collection_type="List"];
   // Finality
   repeated bytes     fringe         = 18 [(scalapb.field).collection_type="List"];
+  // Mergeable diffs
+  repeated DeploysChannelDiff mergeables   = 20 [(scalapb.field).collection_type="List"];
 }
 
 message DeployDataProto {

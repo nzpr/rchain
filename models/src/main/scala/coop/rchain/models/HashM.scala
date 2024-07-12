@@ -183,6 +183,10 @@ object HashM extends HashMDerivation {
 
   implicit val viewProtoHash = gen[ViewProto]
   implicit val viewInfoHash  = gen[ViewInfo]
+
+  // Mergeables
+  implicit val chanDiffs  = gen[ChannelDiffs]
+  implicit val dChanDiffs = gen[DeploysChannelDiff]
 }
 
 trait HashMDerivation {

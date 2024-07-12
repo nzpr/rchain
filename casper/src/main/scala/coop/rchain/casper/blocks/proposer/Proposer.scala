@@ -119,14 +119,15 @@ object Proposer {
     /* Storage */     : BlockStore: BlockDagStorage
     /* Rholang */     : RuntimeManager
     /* Comm */        : CommUtil
-    /* Diagnostics */ : Log: Span: Metrics
+    /* Diagnostics */ : Span: Metrics
   ] // format: on
   (
       validatorIdentity: ValidatorIdentity,
       shardId: String,
       minPhloPrice: Long,
       epochLength: Int,
-      dummyDeployOpt: Option[(PrivateKey, String)] = None
+      dummyDeployOpt: Option[(PrivateKey, String)] = None,
+      log: Log[F]
   ): Proposer[F] = {
     // TODO: refactor proposer to get this from parent pre state
     def getLatestSeqNumber(sender: Validator): F[Long] =
@@ -137,40 +138,51 @@ object Proposer {
       } yield maxSeqNum.getOrElse(-1)
 
     def createBlock(validatorIdentity: ValidatorIdentity): F[BlockCreatorResult] =
-      for {
-        // merge pre state
-        preState <- MultiParentCasper.getPreStateForNewBlock
-        // misc
-        preStateHash      = preState.preStateHash
-        creatorsPk        = validatorIdentity.publicKey
-        creatorsId        = ByteString.copyFrom(creatorsPk.bytes)
-        creatorsLatestOpt = preState.justifications.find(_.sender == creatorsId)
-        nextSeqNum        = creatorsLatestOpt.map(_.seqNum + 1).getOrElse(0L)
-        nextBlockNum      = preState.justifications.map(_.blockNum).max + 1
-        parentHashes      = preState.justifications.map(_.blockHash)
-        finalBonds        = preState.fringeBondsMap
-        offenders         = preState.justifications.filter(_.validationFailed).map(_.sender)
-        // slashing
-        preStateBonds <- RuntimeManager[F].computeBonds(preStateHash.toByteString)
-        toSlash       = offenders intersect preStateBonds.filter { case (_, b) => b > 0 }.keySet
-        _             <- Log[F].info(s"Slashing senders: [${toSlash.map(_.show).mkString("; ")}]")
-        // epoch
-        changeEpoch = nextBlockNum % epochLength == 0
-        // attestation
-        // no need to attest if nothing meaningful to finalize.
-        dag <- BlockDagStorage[F].getRepresentation
-        conflictSet = dag.dagMessageState.msgMap
-          .between(
-            parentHashes,
-            preState.fringe,
-            (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head,
-            IncludeTop
+      BlockDagStorage[F].getRepresentation.flatMap { dag =>
+        Log
+          .traced(
+            dag.dagMessageState.latestMsgs.map(_.id.toByteArray),
+            validatorIdentity.publicKey.bytes
           )
-        hasDeploys = (b: BlockMessage) => b.state.systemDeploys.nonEmpty || b.state.deploys.nonEmpty
-        nothingToFinalize = conflictSet.toList
-          .traverse(BlockStore[F].getUnsafe)
-          .map(!_.exists(hasDeploys))
-        // TODO enable when multi parent
+          .use { log =>
+            implicit val l: Log[F] = log
+            for {
+              // merge pre state
+              preState <- MultiParentCasper.getPreStateForParents(
+                           dag.dagMessageState.latestMsgs.map(_.id)
+                         )
+              // misc
+              preStateHash      = preState.preStateHash
+              creatorsPk        = validatorIdentity.publicKey
+              creatorsId        = ByteString.copyFrom(creatorsPk.bytes)
+              creatorsLatestOpt = preState.justifications.find(_.sender == creatorsId)
+              nextSeqNum        = creatorsLatestOpt.map(_.seqNum + 1).getOrElse(0L)
+              nextBlockNum      = preState.justifications.map(_.blockNum).max + 1
+              parentHashes      = preState.justifications.map(_.blockHash)
+              finalBonds        = preState.fringeBondsMap
+              offenders         = preState.justifications.filter(_.validationFailed).map(_.sender)
+              // slashing
+              preStateBonds <- RuntimeManager[F].computeBonds(preStateHash.toByteString)
+              toSlash       = offenders intersect preStateBonds.filter { case (_, b) => b > 0 }.keySet
+              _             <- Log[F].info(s"Slashing senders: [${toSlash.map(_.show).mkString("; ")}]")
+              // epoch
+              changeEpoch = nextBlockNum % epochLength == 0
+              // attestation
+              // no need to attest if nothing meaningful to finalize.
+              dag <- BlockDagStorage[F].getRepresentation
+              conflictSet = dag.dagMessageState.msgMap
+                .between(
+                  parentHashes,
+                  preState.fringe,
+                  (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head,
+                  IncludeTop
+                )
+              hasDeploys = (b: BlockMessage) =>
+                b.state.systemDeploys.nonEmpty || b.state.deploys.nonEmpty
+              nothingToFinalize = conflictSet.toList
+                .traverse(BlockStore[F].getUnsafe)
+                .map(!_.exists(hasDeploys))
+              // TODO enable when multi parent
 //        waitingForSupermajorityToAttest = {
 //          val newlySeen = creatorsLatestOpt
 //            .map(_.justifications.flatMap(seen) -- parentHashes.flatMap(seen))
@@ -184,71 +196,72 @@ object Proposer {
 //            !(newStateTransition || Stake.isSuperMajority(attestationStake, preStateBondsStake))
 //          }
 //        }
-        suppressAttestation <- nothingToFinalize //||^ waitingForSupermajorityToAttest
-        // user deploys
-        pooled <- BlockDagStorage[F].pooledDeploys
-        pooledOk <- pooled.toList
-                     .filterA {
-                       case (id, d) =>
-                         val future       = d.data.validAfterBlockNumber > nextBlockNum
-                         val expired      = d.data.validAfterBlockNumber < nextBlockNum - MultiParentCasper.deployLifespan
-                         val replayAttack = BlockDagStorage[F].lookupByDeployId(id).map(_.nonEmpty)
-                         (future.pure ||^ expired.pure ||^ replayAttack).not
-                     }
-                     .map(_.map(_._1))
-        deploys <- {
-          val dummy = dummyDeployOpt
-            .traverse {
-              case (privateKey, term) =>
-                val deployData = ConstructDeploy.sourceDeployNow(
-                  source = term,
-                  sec = privateKey,
-                  vabn = nextBlockNum - 1,
-                  shardId = shardId
-                )
-                BlockDagStorage[F].addDeploy(deployData).as(List(deployData.sig))
-            }
-          OptionT
-            .whenF(pooledOk.nonEmpty)(pooledOk.pure)
-            .orElseF(dummy)
-            .value
-            .map(_.getOrElse(List()))
-        }
-        // create block
-        _ <- Log[F].info(s"Creating block #${nextBlockNum} (seqNum ${nextSeqNum})")
-        result <- BlockCreator(validatorIdentity, shardId).create(
-                   preState,
-                   deploys,
-                   toSlash,
-                   changeEpoch,
-                   suppressAttestation
-                 )
-      } yield result
+              suppressAttestation <- nothingToFinalize //||^ waitingForSupermajorityToAttest
+              // user deploys
+              pooled <- BlockDagStorage[F].pooledDeploys
+              pooledOk <- pooled.toList
+                           .filterA {
+                             case (id, d) =>
+                               val future  = d.data.validAfterBlockNumber > nextBlockNum
+                               val expired = d.data.validAfterBlockNumber < nextBlockNum - MultiParentCasper.deployLifespan
+                               val replayAttack =
+                                 BlockDagStorage[F].lookupByDeployId(id).map(_.nonEmpty)
+                               (future.pure ||^ expired.pure ||^ replayAttack).not
+                           }
+                           .map(_.map(_._1))
+              deploys <- {
+                val dummy = dummyDeployOpt
+                  .traverse {
+                    case (privateKey, term) =>
+                      val deployData = ConstructDeploy.sourceDeployNow(
+                        source = term,
+                        sec = privateKey,
+                        vabn = nextBlockNum - 1,
+                        shardId = shardId
+                      )
+                      BlockDagStorage[F].addDeploy(deployData).as(List(deployData.sig))
+                  }
+                OptionT
+                  .whenF(pooledOk.nonEmpty)(pooledOk.pure)
+                  .orElseF(dummy)
+                  .value
+                  .map(_.getOrElse(List()))
+              }
+              // create block
+              _ <- Log[F].info(s"Creating block #${nextBlockNum} (seqNum ${nextSeqNum})")
+              result <- BlockCreator(validatorIdentity, shardId).create(
+                         preState,
+                         deploys,
+                         toSlash,
+                         changeEpoch,
+                         suppressAttestation
+                       )
+            } yield result
+          }
+      }
 
     def validateBlock(block: BlockMessage) =
-      MultiParentCasper.validate(block, shardId, minPhloPrice).flatMap { result =>
-        result
-          .map { blockMeta =>
-            BlockDagStorage[F].insert(blockMeta, block).as(BlockStatus.valid.asRight[InvalidBlock])
-          }
-          .leftMap {
-            case (_, err) =>
-              FatalError(s"Failed to replay own block: $err").raiseError[F, ValidBlockProcessing]
-          }
-          .merge
-      }
+      MultiParentCasper
+        .validate(block, shardId, minPhloPrice)
+        .flatMap {
+          case Left((_, err)) =>
+            FatalError(s"Failed to replay own block: $err").raiseError[F, ValidBlockProcessing]
+          case Right(blockMeta) =>
+            BlockDagStorage[F]
+              .insert(blockMeta, block)
+              .as(BlockStatus.valid.asRight[InvalidBlock])
+        }
+        .replicateA(1)
+        .map(_.last)
 
     def checkValidatorIsActive(validator: ValidatorIdentity): F[Boolean] =
       for {
-        dag          <- BlockDagStorage[F].getRepresentation
-        latestFringe = dag.dagMessageState.latestFringe
-        // TODO: take bonds map from merged state of fringe
-        //  - it should also include consensus bonds map
-        bondsMap <- if (latestFringe.nonEmpty) latestFringe.head.bondsMap.pure[F]
-                   else BlockDagStorage[F].lookupUnsafe(dag.heightMap.head._2.head).map(_.bondsMap)
-        sender = ByteString.copyFrom(validator.publicKey.bytes)
+        dag      <- BlockDagStorage[F].getRepresentation
+        bondsMap <- MultiParentCasper.bondsMap(dag, dag.dagMessageState.latestMsgs.map(_.id))
+        sender   = ByteString.copyFrom(validator.publicKey.bytes)
       } yield bondsMap.contains(sender)
 
+    implicit val l = log
     val proposeEffect = (b: BlockMessage) =>
       // store block
       BlockStore[F].put(b) >>

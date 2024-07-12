@@ -13,6 +13,7 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models._
 import coop.rchain.models.syntax._
+import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.sdk.dag.View
 
 object ProtoUtil {
@@ -46,7 +47,8 @@ object ProtoUtil {
       rejectedDeploys: Set[ByteString],
       state: RholangState,
       view: View[Validator],
-      fringe: List[BlockHash]
+      fringe: List[BlockHash],
+      mergeables: Seq[Map[Blake2b256Hash, Long]]
   ): BlockMessage = {
     val block = BlockMessage(
       version,
@@ -70,7 +72,8 @@ object ProtoUtil {
       sigAlgorithm = Secp256k1.name,
       sig = ByteString.EMPTY,
       view,
-      fringe
+      fringe,
+      mergeables
     )
 
     val hash = hashBlock(block)

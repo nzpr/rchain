@@ -1,4 +1,4 @@
-package coop.rchain.sdk.primitive
+package coop.rchain.sdk.primitive.syntax
 
 trait ThrowableSyntax {
   implicit def sdkSyntaxThrowable(ex: Throwable): ThrowableOps = new ThrowableOps(ex)

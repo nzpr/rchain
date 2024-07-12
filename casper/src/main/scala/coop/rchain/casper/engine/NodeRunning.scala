@@ -8,20 +8,20 @@ import coop.rchain.blockstorage.BlockStore
 import coop.rchain.blockstorage.BlockStore.BlockStore
 import coop.rchain.blockstorage.dag.BlockDagStorage
 import coop.rchain.casper._
-import coop.rchain.casper.blocks.{BlockReceiver, BlockRetriever}
+import coop.rchain.casper.blocks.BlockRetriever
 import coop.rchain.casper.dag.BlockDagKeyValueStorage
 import coop.rchain.casper.protocol._
+import coop.rchain.casper.rholang.RuntimeManager
 import coop.rchain.casper.syntax._
 import coop.rchain.comm.PeerNode
 import coop.rchain.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
 import coop.rchain.comm.transport.TransportLayer
 import coop.rchain.metrics.Metrics
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.syntax.modelsSyntaxByteString
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.state.{RSpaceExporter, RSpaceStateManager}
-import coop.rchain.shared.syntax._
 import coop.rchain.shared.Log
+import coop.rchain.shared.syntax._
 import fs2.concurrent.Channel
 
 object NodeRunning {
@@ -137,19 +137,6 @@ object NodeRunning {
   }
 
   /**
-    * Peer asks if this node has particular block
-    */
-  def handleHasBlockRequest[F[_]: Monad: TransportLayer: RPConfAsk](
-      peer: PeerNode,
-      hbr: HasBlockRequest
-  )(blockLookup: BlockHash => F[Boolean]): F[Unit] = {
-    val hasBlock  = blockLookup(hbr.hash)
-    val sendBlock = TransportLayer[F].sendToPeer(peer, HasBlockProto(hbr.hash))
-
-    hasBlock.ifM(sendBlock, ().pure[F])
-  }
-
-  /**
     * Peer asks for fork-choice tip
     */
   // TODO name for this message is misleading, as its a request for all tips, not just fork choice.
@@ -239,6 +226,7 @@ class NodeRunning[F[_]
     deployLifespan: Long
 ) {
   import NodeRunning._
+  import coop.rchain.models.BlockHash._
 
   /**
     * Check if block is stored in the BlockStore
@@ -251,52 +239,33 @@ class NodeRunning[F[_]
       handleBlockHashMessage(peer, h)(checkBlockReceived)
 
     case b: BlockMessage =>
-      for {
-        _ <- validatorId match {
-              case None => ().pure[F]
-              case Some(id) =>
-                Log[F]
-                  .warn(
-                    s"There is another node $peer proposing using the same private key as you. " +
-                      s"Or did you restart your node?"
-                  )
-                  .whenA(b.sender == ByteString.copyFrom(id.publicKey.bytes))
-            }
-        _ <- checkBlockReceived(b.blockHash).ifM(
-              Log[F].debug(
-                s"Ignoring BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              ),
-              incomingBlocksQueue.trySend(b) *> Log[F].debug(
-                s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
-                  s"from ${peer.endpoint.host}"
-              )
-            )
-      } yield ()
+      incomingBlocksQueue.trySend(b) *> Log[F].debug(
+        s"Incoming BlockMessage ${PrettyPrinter.buildString(b, short = true)} " +
+          s"from ${peer.endpoint.host}"
+      )
 
     case br: BlockRequest => handleBlockRequest(peer, br)
 
     case hbr: HasBlockRequest =>
-      // Return blocks only available in the DAG (validated)
-      // - blocks can be returned from BlockStore if downloaded from latest in the DAG and not from tips
       for {
-        dag <- BlockDagStorage[F].getRepresentation
-        res <- handleHasBlockRequest(peer, hbr)(dag.contains(_).pure[F])
-      } yield res
-    case HasBlock(blockHash) =>
-      val processKnownBlock =
-        for {
-          blockNotValidated <- BlockReceiver.notValidated(blockHash)
-          _ <- (BlockStore[F].getUnsafe(blockHash) >>= incomingBlocksQueue.send)
-                .whenA(blockNotValidated)
-        } yield ()
-      val logProcess = Log[F].debug(
-        s"Incoming HasBlockMessage ${PrettyPrinter.buildString(blockHash)} from ${peer.endpoint.host}"
-      )
-      val requestUnknownBlock = BlockRetriever[F]
-        .admitHash(blockHash, peer.some, BlockRetriever.HasBlockMessageReceived)
+        has <- BlockStore[F].contains(hbr.hash)
+        _   <- TransportLayer[F].sendToPeer(peer, HasBlockProto(hbr.hash)).whenA(has)
+        _ <- Log[F].debug(s"Peer ${peer.endpoint.host} is asking for absent block ${{
+              PrettyPrinter.buildString(hbr.hash)
+            }}")
+      } yield ()
 
-      checkBlockReceived(blockHash).ifM(processKnownBlock, logProcess >> requestUnknownBlock.void)
+    case HasBlock(blockHash) =>
+      Log[F].debug(
+        s"Incoming HasBlockMessage ${PrettyPrinter.buildString(blockHash)} from ${peer.endpoint.host}"
+      ) *>
+        BlockStore[F].get1(blockHash) flatMap {
+        case Some(block) => incomingBlocksQueue.send(block).void
+        case None =>
+          BlockRetriever[F]
+            .admitHash(blockHash, peer.some, BlockRetriever.HasBlockMessageReceived)
+            .void
+      }
 
     case ForkChoiceTipRequest => handleForkChoiceTipRequest(peer)
 
@@ -309,13 +278,20 @@ class NodeRunning[F[_]
         lowerBound = {
           val x = BlockDagKeyValueStorage
             .dbPruneFringe(dag.dagMessageState, dag.childMap)
-            // TODO this "- deployLifespan" is because double space of search for double spend might
-            //  be bigger then required to restore the state. Make it proper to download minimum.
-            .map(x => ProposeSlot(x.sender, x.senderSeq - deployLifespan))
+            .map(x => ProposeSlot(x.sender, x.senderSeq))
           if (x.isEmpty) dag.dagMessageState.latestMsgs.map(m => ProposeSlot(m.sender, 0L)) else x
         }
 
-        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound)
+        finalStateHashes = dag.dagMessageState.latestMsgs
+          .map(_.fringe)
+          .map(dag.fringeStates)
+          .map(_.stateHash.toByteString)
+
+        sh <- if (finalStateHashes == Set(RuntimeManager.emptyStateHashFixed))
+               BlockStore[F].getUnsafe(dag.heightMap.head._2.head).map(_.postStateHash).map(Set(_))
+             else finalStateHashes.pure
+
+        bootstrapDataMsg = BootstrapDataMessage(lms.toSeq, lowerBound, sh.toList)
 
         _ <- handleBootstrapDataRequest(peer, bootstrapDataMsg)
 

@@ -1,8 +1,10 @@
 package coop.rchain.shared
 
 import cats._
-import cats.effect.Sync
+import cats.effect.kernel.Ref.Make
+import cats.effect.{Ref, Resource, Sync}
 import cats.syntax.all._
+import com.typesafe.scalalogging.Logger
 import coop.rchain.catscontrib.effect.implicits._
 
 import scala.language.experimental.macros
@@ -46,6 +48,50 @@ trait Log[F[_]] {
 }
 
 object Log extends LogInstances {
+
+  def traced[F[_]: Applicative: Make](
+      view: Set[Array[Byte]],
+      sender: Array[Byte]
+  ): Resource[F, Log[F]] =
+    Resource
+      .make(Ref.of[F, String](""))(
+        _.get.map(
+          log =>
+            Logger
+              .apply("BLOCK LOG")
+              .info(s"""${view.map(Base16.encode(_).take(6)).toList.sorted} @ ${Base16
+                         .encode(sender)
+                         .take(6)}
+                     |$log""".stripMargin.strip)
+        )
+      )
+      .map { ref =>
+        new Log[F] {
+          override def isTraceEnabled(implicit ev: LogSource): F[Boolean] = false.pure[F]
+
+          override def trace(msg: => String)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def debug(msg: => String)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def info(msg: => String)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def warn(msg: => String)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def warn(msg: => String, cause: Throwable)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def error(msg: => String)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+
+          override def error(msg: => String, cause: Throwable)(implicit ev: LogSource): F[Unit] =
+            ref.update(x => s"$x> $msg\n")
+        }
+      }
+
   def apply[F[_]](implicit L: Log[F]): Log[F] = L
 
   class NOPLog[F[_]: Applicative] extends Log[F] {

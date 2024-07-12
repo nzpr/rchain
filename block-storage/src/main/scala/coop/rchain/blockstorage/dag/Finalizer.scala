@@ -67,8 +67,7 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
     * Checks if minimum messages are enough for next fringe calculation
     */
   def checkMinMessages(minMsgs: List[Message[M, S]], bondsMap: Map[S, Long]): Boolean =
-    // TODO: add support for epoch changes, simple comparison for senders count is not enough
-    minMsgs.sizeIs == bondsMap.size
+    minMsgs.map(_.sender).toSet == bondsMap.keySet
 
   /**
     * Finds top messages referenced from minimum messages (next message from each sender)
@@ -76,7 +75,8 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
   def calculateNextLayer(minMsgs: List[Message[M, S]]): Map[S, Message[M, S]] = {
     val minMessagesMap = minMsgs.map(x => (x.sender, x)).toMap
     minMsgs
-      .flatMap(_.parents.map(msgMap))
+      .flatMap(_.parents)
+      .map(msgMap)
       .filter(x => minMessagesMap.keySet.contains(x.sender))
       .foldLeft(minMessagesMap) {
         case (acc, m) =>
@@ -151,7 +151,7 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
   def calculateFinalization(
       justifications: Set[Message[M, S]],
       bondsMap: Map[S, Long]
-  ): (Set[Message[M, S]], Option[Set[Message[M, S]]]) = {
+  ): (Set[Message[M, S]], List[Set[Message[M, S]]]) = {
     // Calculate next fringe from previous fringe
     def nextFringe(prevFringe: Set[Message[M, S]]): Option[Set[Message[M, S]]] =
       for {
@@ -179,8 +179,8 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
 
     // Find top most fringe
     // - multiple fringes can be finalized at once
-    val newFringeOpt = LazyList.unfold(parentFringe)(nextFringe(_).map(nf => (nf, nf))).lastOption
+    val newFringes = LazyList.unfold(parentFringe)(nextFringe(_).map(nf => (nf, nf)))
 
-    (parentFringe, newFringeOpt)
+    (parentFringe, newFringes.toList)
   }
 }
