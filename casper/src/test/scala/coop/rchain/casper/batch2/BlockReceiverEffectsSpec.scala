@@ -24,6 +24,7 @@ import org.scalatest.matchers.should.Matchers
 import cats.effect.testing.scalatest.AsyncIOSpec
 
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.DurationInt
 
 class BlockReceiverEffectsSpec
     extends AsyncFlatSpec
@@ -195,7 +196,10 @@ class BlockReceiverEffectsSpec
         // Limit the chunk size to prevent taking more then one element
           .map(_.chunkLimit(1).unchunks)
       }
-      res <- f(incomingBlockQueue, validatedBlocksQueue, blockReceiver, bs, br, bds)
+      res <- Async[F].timeout(
+              f(incomingBlockQueue, validatedBlocksQueue, blockReceiver, bs, br, bds),
+              10.seconds
+            )
     } yield res
 
   private def makeDefaultBlock =
