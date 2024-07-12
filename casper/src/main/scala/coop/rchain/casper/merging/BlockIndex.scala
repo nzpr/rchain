@@ -115,16 +115,16 @@ object BlockIndex {
       sysDeploysData = sysDeploys
         .collect {
           case (Succeeded(log, SlashSystemDeployData(_)), mergeChs) =>
-            (blockHash.concat(SYS_SLASH_DEPLOY_ID), SYS_SLASH_DEPLOY_COST, log, mergeChs)
+            (SYS_SLASH_DEPLOY_ID.concat(blockHash), SYS_SLASH_DEPLOY_COST, log, mergeChs)
           case (Succeeded(log, CloseBlockSystemDeployData), mergeChs) =>
             (
-              blockHash.concat(SYS_CLOSE_BLOCK_DEPLOY_ID),
+              SYS_CLOSE_BLOCK_DEPLOY_ID.concat(blockHash),
               SYS_CLOSE_BLOCK_DEPLOY_COST,
               log,
               mergeChs
             )
           case (Succeeded(log, Empty), mergeChs) =>
-            (blockHash.concat(SYS_EMPTY_DEPLOY_ID), SYS_EMPTY_DEPLOY_COST, log, mergeChs)
+            (SYS_EMPTY_DEPLOY_ID.concat(blockHash), SYS_EMPTY_DEPLOY_COST, log, mergeChs)
         }
       sysDeployIndices <- sysDeploysData.traverse {
                            case (sig, cost, log, mergeChs) =>

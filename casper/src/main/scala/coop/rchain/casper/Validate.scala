@@ -364,20 +364,20 @@ object Validate {
       }
     } yield result
 
-  def bondsCache[F[_]: Async: RuntimeManager: Log](
-      b: BlockMessage
-  ): F[ValidBlockProcessing] = {
-    val bonds          = b.bonds
-    val tuplespaceHash = b.postStateHash
-
-    RuntimeManager[F].computeBonds(tuplespaceHash).flatMap { computedBonds =>
-      if (bonds.toSet == computedBonds.toSet) {
-        BlockStatus.valid.asRight[InvalidBlock].pure
-      } else {
-        for {
-          _ <- Log[F].warn("Bonds in proof of stake contract do not match block's bond cache.")
-        } yield BlockStatus.invalidBondsCache.asLeft[ValidBlock]
-      }
+  def bondsCache[F[_]: Async: RuntimeManager: BlockDagStorage: Log](
+      b: BlockMessage,
+      computedMetadata: BlockMetadata
+  ): F[ValidBlockProcessing] = BlockDagStorage[F].getRepresentation.flatMap { dag =>
+    if (computedMetadata.bondsMap == b.bonds) {
+      BlockStatus.valid.asRight[InvalidBlock].pure
+    } else {
+      Log[F]
+        .warn(
+          s"Bonds in proof of stake contract do not match block's bond cache. " +
+            s"Computed: ${computedMetadata.bondsMap}" +
+            s"Block: ${b.bonds}"
+        )
+        .as(BlockStatus.invalidBondsCache.asLeft[ValidBlock])
     }
   }
 

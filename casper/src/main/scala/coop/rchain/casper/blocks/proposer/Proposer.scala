@@ -241,27 +241,24 @@ object Proposer {
       }
 
     def validateBlock(block: BlockMessage) =
-      MultiParentCasper.validate(block, shardId, minPhloPrice).flatMap { result =>
-        result
-          .map { blockMeta =>
-            BlockDagStorage[F].insert(blockMeta, block).as(BlockStatus.valid.asRight[InvalidBlock])
-          }
-          .leftMap {
-            case (_, err) =>
-              FatalError(s"Failed to replay own block: $err").raiseError[F, ValidBlockProcessing]
-          }
-          .merge
-      }
+      MultiParentCasper
+        .validate(block, shardId, minPhloPrice)
+        .flatMap {
+          case Left((_, err)) =>
+            FatalError(s"Failed to replay own block: $err").raiseError[F, ValidBlockProcessing]
+          case Right(blockMeta) =>
+            BlockDagStorage[F]
+              .insert(blockMeta, block)
+              .as(BlockStatus.valid.asRight[InvalidBlock])
+        }
+        .replicateA(1)
+        .map(_.last)
 
     def checkValidatorIsActive(validator: ValidatorIdentity): F[Boolean] =
       for {
-        dag          <- BlockDagStorage[F].getRepresentation
-        latestFringe = dag.dagMessageState.latestFringe
-        // TODO: take bonds map from merged state of fringe
-        //  - it should also include consensus bonds map
-        bondsMap <- if (latestFringe.nonEmpty) latestFringe.head.bondsMap.pure[F]
-                   else BlockDagStorage[F].lookupUnsafe(dag.heightMap.head._2.head).map(_.bondsMap)
-        sender = ByteString.copyFrom(validator.publicKey.bytes)
+        dag      <- BlockDagStorage[F].getRepresentation
+        bondsMap <- MultiParentCasper.bondsMap(dag, dag.dagMessageState.latestMsgs.map(_.id))
+        sender   = ByteString.copyFrom(validator.publicKey.bytes)
       } yield bondsMap.contains(sender)
 
     implicit val l = log
