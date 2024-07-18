@@ -6,6 +6,7 @@ import cats.syntax.all._
 import coop.rchain.casper.CasperMetricsSource
 import coop.rchain.casper.protocol.{
   CloseBlockSystemDeployData,
+  EjectSystemDeployData,
   Empty,
   ProcessedDeploy,
   ProcessedSystemDeploy,
@@ -15,6 +16,7 @@ import coop.rchain.casper.rholang.InterpreterUtil.printDeployErrors
 import coop.rchain.casper.rholang.syntax.RuntimeSyntax.SysEvalResult
 import coop.rchain.casper.rholang.sysdeploys.{
   CloseBlockDeploy,
+  EjectDeploy,
   PreChargeDeploy,
   RefundDeploy,
   SlashDeploy
@@ -285,6 +287,18 @@ final class RuntimeReplayOps[F[_]](private val runtime: ReplayRhoRuntime[F]) ext
         rigWithCheck(
           processedSysDeploy,
           replaySystemDeployInternal(slashDeploy, none).semiflatMap {
+            case (_, er) =>
+              runtime.createSoftCheckpoint.whenA(er.succeeded) *>
+                runtime.getNumberChannelsData(er.mergeable).map((_, er))
+          }
+        ).map(_._1)
+      case EjectSystemDeployData(ejectedValidator) =>
+        val ejectDeploy = {
+          EjectDeploy(ejectedValidator, rand)
+        }
+        rigWithCheck(
+          processedSysDeploy,
+          replaySystemDeployInternal(ejectDeploy, none).semiflatMap {
             case (_, er) =>
               runtime.createSoftCheckpoint.whenA(er.succeeded) *>
                 runtime.getNumberChannelsData(er.mergeable).map((_, er))

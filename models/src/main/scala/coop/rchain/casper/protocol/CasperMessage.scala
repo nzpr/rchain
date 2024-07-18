@@ -7,7 +7,7 @@ import coop.rchain.casper.PrettyPrinter
 import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.{SignaturesAlg, Signed}
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.PCost
+import coop.rchain.models.{FringeData, PCost}
 import coop.rchain.models.syntax._
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash.StateHash
@@ -133,8 +133,7 @@ final case class BlockMessage(
     justifications: List[BlockHash],
     bonds: Map[Validator, Long],
     // Rejections
-    rejectedDeploys: Set[ByteString],
-    rejectedBlocks: Set[BlockHash],
+    fringes: List[FringeData],
     rejectedSenders: Set[ByteString],
     // Rholang (tuple space) state change
     state: RholangState,
@@ -167,8 +166,7 @@ object BlockMessage {
       bm.postStateHash,
       bm.justifications,
       bm.bonds.map(b => (b.validator, b.stake)).toMap,
-      bm.rejectedDeploys.toSet,
-      bm.rejectedBlocks.toSet,
+      bm.fringes.map(FringeData.from),
       bm.rejectedSenders.toSet,
       state,
       bm.sigAlgorithm,
@@ -190,8 +188,6 @@ object BlockMessage {
       .sortBy { case (validator, _) => validator }
       .map { case (validator, stake) => BondProto(validator, stake) }
     // Sorted rejections
-    val sortedRejectedDeploys = bm.rejectedDeploys.toList.sorted
-    val sortedRejectedBlocks  = bm.rejectedBlocks.toList.sorted
     val sortedRejectedSenders = bm.rejectedSenders.toList.sorted
     // Build proto message
     BlockMessageProto()
@@ -205,8 +201,7 @@ object BlockMessage {
       .withPostStateHash(bm.postStateHash)
       .withJustifications(sortedJustifications)
       .withBonds(sortedBonds)
-      .withRejectedDeploys(sortedRejectedDeploys)
-      .withRejectedBlocks(sortedRejectedBlocks)
+      .withFringes(bm.fringes.map(FringeData.toProto))
       .withRejectedSenders(sortedRejectedSenders)
       .withState(RholangState.toProto(bm.state))
       .withSigAlgorithm(bm.sigAlgorithm)
@@ -300,6 +295,7 @@ object ProcessedDeploy {
 sealed trait SystemDeployData
 
 final case class SlashSystemDeployData(slashedValidator: Validator) extends SystemDeployData
+final case class EjectSystemDeployData(ejectedValidator: Validator) extends SystemDeployData
 case object CloseBlockSystemDeployData                              extends SystemDeployData
 case object Empty                                                   extends SystemDeployData
 
@@ -326,6 +322,10 @@ object SystemDeployData {
       case SlashSystemDeployData(slashedValidator) =>
         SystemDeployDataProto().withSlashSystemDeploy(
           SlashSystemDeployDataProto(slashedValidator)
+        )
+      case EjectSystemDeployData(ejectedValidator) =>
+        SystemDeployDataProto().withEjectSystemDeploy(
+          EjectSystemDeployDataProto(ejectedValidator)
         )
       case CloseBlockSystemDeployData =>
         SystemDeployDataProto().withCloseBlockSystemDeploy(

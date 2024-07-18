@@ -31,7 +31,8 @@ final case class Message[M, S](
     parents: Set[M],
     fringe: Set[M],
     // Cache of seen message ids
-    seen: View[S]
+    seen: View[S],
+    ejections: Set[S] = Set.empty[S]
 ) {
   override def hashCode(): Int = this.id.hashCode()
 }
@@ -151,7 +152,14 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
   def calculateFinalization(
       justifications: Set[Message[M, S]],
       bondsMap: Map[S, Long]
-  ): (Set[Message[M, S]], List[Set[Message[M, S]]]) = {
+  ): (Set[Message[M, S]], Either[Set[S], List[Set[Message[M, S]]]]) = {
+    def missingSenders(prevFringe: Set[Message[M, S]]): Set[S] = {
+      val minMsgs = justifications.toList.flatMap(p => (p +: selfParents(p, prevFringe)).lastOption)
+      // Include ancestors of minimum messages as next layer
+      val nextLayer = calculateNextLayer(minMsgs)
+      bondsMap.keySet -- nextLayer.keySet
+    }
+
     // Calculate next fringe from previous fringe
     def nextFringe(prevFringe: Set[Message[M, S]]): Option[Set[Message[M, S]]] =
       for {
@@ -177,10 +185,12 @@ final case class Finalizer[M, S](msgMap: Map[M, Message[M, S]]) {
     // Latest fringe seen from justifications
     val parentFringe = msgMap.latestFringe(justifications)
 
+    val missing = missingSenders(parentFringe)
+
     // Find top most fringe
     // - multiple fringes can be finalized at once
     val newFringes = LazyList.unfold(parentFringe)(nextFringe(_).map(nf => (nf, nf)))
 
-    (parentFringe, newFringes.toList)
+    (parentFringe, missing.isEmpty.guard[Option].as(newFringes.toList).toRight(missing))
   }
 }

@@ -44,11 +44,11 @@ object ProtoUtil {
       postStateHash: ByteString,
       justifications: List[BlockHash],
       bonds: Map[Validator, Long],
-      rejectedDeploys: Set[ByteString],
       state: RholangState,
       view: View[Validator],
       fringe: List[BlockHash],
-      mergeables: Seq[Map[Blake2b256Hash, Long]]
+      mergeables: Seq[Map[Blake2b256Hash, Long]],
+      fringeDatas: List[FringeData]
   ): BlockMessage = {
     val block = BlockMessage(
       version,
@@ -62,8 +62,7 @@ object ProtoUtil {
       postStateHash = postStateHash,
       justifications,
       bonds,
-      rejectedDeploys,
-      rejectedBlocks = Set(),
+      fringes = fringeDatas,
       rejectedSenders = Set(),
       state,
       // Signature algorithm is now part of the block hash

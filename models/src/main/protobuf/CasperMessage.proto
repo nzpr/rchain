@@ -101,8 +101,7 @@ message BlockMessageProto {
   repeated bytes     justifications =  9 [(scalapb.field).collection_type="List"]; // map of all validators to latest blocks based on current view
   repeated BondProto bonds          = 10 [(scalapb.field).collection_type="List"]; // validators and their stakes
   // Rejected data in finalized fringe
-  repeated bytes rejectedDeploys    = 11 [(scalapb.field).collection_type="List"];
-  repeated bytes rejectedBlocks     = 12 [(scalapb.field).collection_type="List"];
+  repeated FringeDataProto fringes  = 11 [(scalapb.field).collection_type="List"];
   repeated bytes rejectedSenders    = 13 [(scalapb.field).collection_type="List"];
   // Rholang execution trace
   RholangStateProto  state          = 14 [(scalapb.field).no_box = true];
@@ -146,13 +145,18 @@ message SlashSystemDeployDataProto {
   bytes slashedValidator = 1;
 }
 
+message EjectSystemDeployDataProto {
+  bytes ejectedValidator = 1;
+}
+
 message CloseBlockSystemDeployDataProto{
 }
 
 message SystemDeployDataProto{
   oneof systemDeploy{
     SlashSystemDeployDataProto slashSystemDeploy = 1;
-    CloseBlockSystemDeployDataProto closeBlockSystemDeploy = 2;
+    EjectSystemDeployDataProto ejectSystemDeploy = 2;
+    CloseBlockSystemDeployDataProto closeBlockSystemDeploy = 3;
   }
 }
 
@@ -257,6 +261,7 @@ message BlockMetadataProto {
   bytes memberOfFringe          = 40;
   // View of the block TODO this is also on block, remove here
   repeated ViewProto view       = 41 [(scalapb.field).collection_type="List"];
+  repeated bytes ejections      = 42 [(scalapb.field).collection_type="List"];
 }
 
 message FringeDataProto {

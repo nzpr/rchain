@@ -20,6 +20,7 @@ import coop.rchain.models.syntax._
 import coop.rchain.models.{BlockHash => _, _}
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.rspace.history.RadixTree
+import coop.rchain.sdk.dag.View.IncludeTop
 import coop.rchain.sdk.error.FatalError
 import coop.rchain.sdk.syntax.all.mapSyntax
 import coop.rchain.shared._
@@ -49,9 +50,26 @@ object MultiParentCasper {
     // Get currently finalized bonds map
     val prevFringe       = dag.dagMessageState.msgMap.latestFringe(lms)
     val prevFringeHashes = prevFringe.map(_.id)
-    if (prevFringe.isEmpty)
-      lms.head.bondsMap.pure[F]
-    else
+
+    def hl(v: Validator, sN: Long): BlockHash = {
+      val l = dag.hashLookup((v, sN))
+      assert(l.size == 1, "Equivocations are not supported")
+      l.head
+    }
+    val ejections =
+      dag.dagMessageState.msgMap
+        .between(parents, prevFringeHashes, hl, IncludeTop)
+        .flatMap(dag.dagMessageState.msgMap(_).ejections)
+
+    if (prevFringe.isEmpty) {
+      val bondsMap = lms.head.bondsMap
+      Log
+        .log[F]
+        .info(s"using genesis bonds ${bondsMap.view.map {
+          case (v, s) => v.toHexString.take(6) -> s
+        }.toMap}")
+        .as(bondsMap)
+    } else
       for {
         // Calculate finalized fringe from justifications
         // Previous fringe state should be present (loaded from BlockMetadata store)
@@ -74,7 +92,7 @@ object MultiParentCasper {
               .info(s"bonds in ${prevFringeStateHash.toBlake2b256Hash} ${bondsMap.view.map {
                 case (v, s) => v.toHexString.take(6) -> s
               }.toMap}")
-      } yield bondsMap
+      } yield bondsMap -- ejections
   }
 
   def getPreStateForNewBlock[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log]
@@ -122,8 +140,20 @@ object MultiParentCasper {
       bondsMap        <- bondsMap(dag, parentHashes)
 
       finalizer = Finalizer(dag.dagMessageState.msgMap)
-      (_, newFringesFound) = finalizer
+      (_, either) = finalizer
         .calculateFinalization(parents, bondsMap)
+
+      newFringesFound = either.getOrElse(List())
+      missing         = either.swap.getOrElse(Set())
+      conflictSet = dag.dagMessageState.msgMap
+        .between(
+          parentHashes,
+          prevFringeHashes,
+          (v, sN) => dag.hashLookup.getUnsafe(v -> sN).head,
+          IncludeTop
+        )
+      toEject = if (conflictSet.size > (bondsMap.size ^ 3)) missing else Set.empty[Validator]
+      _       <- Log[F].info(s"Ejecting ${toEject.map(_.toHexString.take(8))}")
 
       _ <- Log[F]
             .info(s"Found ${newFringesFound.size} new fringes: ${newFringesFound
@@ -131,81 +161,92 @@ object MultiParentCasper {
             .whenA(newFringesFound.nonEmpty)
 
       // If new fringe is finalized, merge it
-      newFringeResult <- newFringesFound.nonEmpty
-                          .guard[Option]
-                          .as(newFringesFound.map(_.map(_.id)))
-                          .traverse { fringes =>
-                            def doMerge(
-                                prevFringeStateHash: Blake2b256Hash,
-                                prevFringe: Set[BlockHash],
-                                fringe: Set[BlockHash]
-                            ): F[
-                              (Blake2b256Hash, Set[ByteString], Set[ByteString])
-                            ] = {
-                              val mergeFringe = {
-                                val (mScope, _) =
-                                  MergeScope.fromDag(
-                                    fringe,
-                                    prevFringe,
-                                    dag.childMap,
-                                    msgMap,
-                                    dag.hashLookup.getUnsafe
-                                  )
-                                val checkGenesisCase =
-                                  if (prevFringe.isEmpty) {
-                                    // genesis case
-                                    val genesisHash = dag.heightMap.getUnsafe(0).head
-                                    BlockStore[F]
-                                      .getUnsafe(genesisHash)
-                                      .map(
-                                        mScope.copy(
-                                          conflictScope = mScope.conflictScope - genesisHash
-                                        ) -> _.postStateHash.toBlake2b256Hash
-                                      )
-                                  } else (mScope, prevFringeStateHash).pure
-                                checkGenesisCase.flatMap {
-                                  case (mScope1, prevFringeStateHash1) =>
-                                    MergeScope
-                                      .merge(
-                                        mScope1,
-                                        prevFringeStateHash1,
-                                        dag.fringeStates,
-                                        RuntimeManager[F].getHistoryRepo,
-                                        BlockIndex.getBlockIndex[F](_)
-                                      )
-                                      .map(_ -> mScope.conflictScope)
+      fringesFoundDatas <- newFringesFound.nonEmpty
+                            .guard[Option]
+                            .as(newFringesFound.map(_.map(_.id)))
+                            .traverse { fringes =>
+                              def doMerge(
+                                  accFringeDatas: List[FringeData],
+                                  prevFringeStateHash: Blake2b256Hash,
+                                  prevFringe: Set[BlockHash],
+                                  fringe: Set[BlockHash]
+                              ): F[FringeData] = {
+                                val mergeFringe = {
+                                  val (mScope, _) =
+                                    MergeScope.fromDag(
+                                      fringe,
+                                      prevFringe,
+                                      dag.childMap,
+                                      msgMap,
+                                      dag.hashLookup.getUnsafe
+                                    )
+                                  val checkGenesisCase =
+                                    if (prevFringe.isEmpty) {
+                                      // genesis case
+                                      val genesisHash = dag.heightMap.getUnsafe(0).head
+                                      BlockStore[F]
+                                        .getUnsafe(genesisHash)
+                                        .map(
+                                          mScope.copy(
+                                            conflictScope = mScope.conflictScope - genesisHash
+                                          ) -> _.postStateHash.toBlake2b256Hash
+                                        )
+                                    } else (mScope, prevFringeStateHash).pure
+                                  checkGenesisCase.flatMap {
+                                    case (mScope1, prevFringeStateHash1) =>
+                                      MergeScope
+                                        .merge(
+                                          mScope1,
+                                          prevFringeStateHash1,
+                                          dag.fringeStates ++ accFringeDatas
+                                            .map(x => x.fringe -> x),
+                                          RuntimeManager[F].getHistoryRepo,
+                                          BlockIndex.getBlockIndex[F](_)
+                                        )
+                                        .map {
+                                          case (finalizedState, _, rejected) =>
+                                            FringeData(
+                                              FringeData.fringeHash(fringe),
+                                              fringe,
+                                              finalizedState,
+                                              rejected
+                                            ) -> mScope.conflictScope
+                                        }
+                                  }
+                                }
+                                mergeFringe.flatMap {
+                                  case (result @ FringeData(_, _, finalizedState, rejected)) -> cScope =>
+                                    val msgFinalized =
+                                      s"New finalized fringe. " +
+                                        s"${prevFringe.map(_.toHexString.take(8)).toList.sorted} @ $prevFringeStateHash => " +
+                                        s"${fringe.map(_.toHexString.take(8)).toList.sorted} @ $finalizedState. " +
+                                        s"ConflictScope: ${cScope.map(_.toHexString.take(8)).toList.sorted}. " +
+                                        s"RejectedDeploys: ${rejected.map(_.toHexString.take(8)).toList.sorted}. " //+
+                                    //s"MergedDeploys: ${merged.map(_.toHexString.take(8)).toList.sorted}."
+                                    Log[F].info(msgFinalized).as(result)
                                 }
                               }
-                              mergeFringe.flatMap {
-                                case result -> cScope =>
-                                  val (finalizedState, merged, rejected) = result
-                                  val msgFinalized =
-                                    s"New finalized fringe. " +
-                                      s"${prevFringeHashes.map(_.toHexString.take(8)).toList.sorted} @ $prevFringeState => " +
-                                      s"${fringe.map(_.toHexString.take(8)).toList.sorted} @ $finalizedState. " +
-                                      s"ConflictScope: ${cScope.map(_.toHexString.take(8)).toList.sorted}. " +
-                                      s"RejectedDeploys: ${rejected.map(_.toHexString.take(8)).toList.sorted}. " +
-                                      s"MergedDeploys: ${merged.map(_.toHexString.take(8)).toList.sorted}."
-                                  Log[F].info(msgFinalized).as(result)
-                              }
-                            }
 
-                            fringes.foldM(
-                              (
-                                prevFringeState,
-                                prevFringeHashes,
-                                Set.empty[ByteString],
-                                Set.empty[ByteString]
-                              )
-                            ) {
-                              case ((prevFS, prevF, mjAcc, rjAcc), newF) =>
-                                doMerge(prevFS, prevF, newF).map {
-                                  case (newSt, mj, rj) => (newSt, newF, mjAcc ++ mj, rjAcc ++ rj)
+                              fringes
+                                .foldM(
+                                  (
+                                    prevFringeState,
+                                    prevFringeHashes,
+                                    List.empty[FringeData]
+                                  )
+                                ) {
+                                  case ((prevFS, prevF, fdAcc), newF) =>
+                                    doMerge(fdAcc, prevFS, prevF, newF).map {
+                                      case x @ FringeData(_, _, newSt, _) =>
+                                        (newSt, newF, fdAcc :+ x)
+                                    }
                                 }
+                                .map(_._3)
                             }
-                          }
-      (fringeState, newFringe, finMergedDeploys, finRejectedDeploys) = newFringeResult getOrElse (prevFringeState, prevFringeHashes, Set
-        .empty[ByteString], Set.empty[ByteString])
+      newFringe = fringesFoundDatas.flatMap(_.lastOption.map(_.fringe)).getOrElse(prevFringeHashes)
+      fringeState = fringesFoundDatas
+        .flatMap(_.lastOption.map(_.stateHash))
+        .getOrElse(prevFringeState)
 
       maxHeight  = justifications.map(_.blockNum).maximumOption.getOrElse(-1L)
       maxSeqNums = justifications.map(m => (m.sender, m.seqNum)).toMap
@@ -237,14 +278,18 @@ object MultiParentCasper {
                                      checkGenesisCase
                                        .flatMap {
                                          case (mScope1, prevFringeStateHash1) =>
-                                           MergeScope
-                                             .merge(
-                                               mScope1,
-                                               prevFringeStateHash1,
-                                               dag.fringeStates,
-                                               RuntimeManager[F].getHistoryRepo,
-                                               BlockIndex.getBlockIndex[F](_)
-                                             )
+                                           BlockDagStorage[F].getRepresentation.flatMap { d =>
+                                             MergeScope
+                                               .merge(
+                                                 mScope1,
+                                                 prevFringeStateHash1,
+                                                 d.fringeStates ++ fringesFoundDatas
+                                                   .getOrElse(List())
+                                                   .map(x => x.fringe -> x),
+                                                 RuntimeManager[F].getHistoryRepo,
+                                                 BlockIndex.getBlockIndex[F](_)
+                                               )
+                                           }
                                        }
                                        .map(_ -> mScope.conflictScope)
                                        .flatMap {
@@ -268,10 +313,11 @@ object MultiParentCasper {
       maxSeqNums,
       fringe = newFringe,
       fringeState = fringeState,
-      fringeBondsMap = bondsMap,
-      fringeRejectedDeploys = finRejectedDeploys,
+      bonds = bondsMap,
+      foundFringes = fringesFoundDatas.getOrElse(List()),
       preStateHash = preStateHash,
-      rejectedDeploys = csRejectedDeploys
+      rejectedDeploys = csRejectedDeploys,
+      toEject = toEject
     )
 
   def validate[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Metrics: Span](

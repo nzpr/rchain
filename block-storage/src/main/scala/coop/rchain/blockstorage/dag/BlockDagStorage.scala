@@ -5,13 +5,17 @@ import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.casper.protocol.{BlockMessage, DeployData}
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.BlockMetadata
+import coop.rchain.models.{BlockMetadata, FringeData}
 
 trait BlockDagStorage[F[_]] {
 
   def getRepresentation: F[DagRepresentation]
 
-  def insert(blockMetadata: BlockMetadata, block: BlockMessage, isSync: Boolean = false): F[Unit]
+  def insert(
+      blockMetadata: BlockMetadata,
+      block: BlockMessage,
+      isSync: Boolean = false
+  ): F[Unit]
 
   def lookup(blockHash: BlockHash): F[Option[BlockMetadata]]
 

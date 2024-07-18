@@ -25,7 +25,7 @@ import coop.rchain.models.BlockHash.BlockHash
 import coop.rchain.models.NormalizerEnv.ToEnvMap
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.syntax._
-import coop.rchain.models.{BlockMetadata, NormalizerEnv, Par}
+import coop.rchain.models.{BlockMetadata, FringeData, NormalizerEnv, Par}
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.rholang.interpreter.compiler.Compiler
 import coop.rchain.rholang.interpreter.errors.InterpreterError
@@ -74,32 +74,31 @@ object InterpreterUtil {
                      fringe = Set[BlockHash](),
                      fringeState = genesisPreStateHash,
                      // TODO: validate with data from bonds file
-                     fringeBondsMap = block.bonds,
-                     fringeRejectedDeploys = Set[ByteString](),
+                     bonds = block.bonds,
+                     foundFringes = List[FringeData](),
                      // TODO: validate with data from config (genesis block number)
                      maxBlockNum = 0L,
                      // TODO: validate with sender in bonds map
                      maxSeqNums = Map[Validator, Long](block.sender -> 0L),
                      // TODO: validate genesis post-state hash
                      preStateHash = genesisPreStateHash,
-                     rejectedDeploys = Set()
+                     rejectedDeploys = Set(),
+                     toEject = Set()
                    ).pure[F]
                  }
 
       computedPreStateHash = preState.preStateHash.toByteString
-      rejectedDeployIds    = preState.fringeRejectedDeploys
+      foundFringes         = preState.foundFringes
       result <- {
         val incomingPreStateHash = block.preStateHash
 
-        if (rejectedDeployIds != block.rejectedDeploys) {
-          // TODO: if rejected deploys are different that almost certain
-          //  hashes doesn't match also so this branch is unreachable
+        if (foundFringes != block.fringes) {
           Log[F]
             .warn(
-              s"Computed rejected deploys " +
-                s"[${rejectedDeployIds.map(PrettyPrinter.buildString).mkString(",")}] does not equal " +
-                s"block's rejected deploy " +
-                s"[${block.rejectedDeploys.map(PrettyPrinter.buildString).mkString(",")}]"
+              s"Computed fringes " +
+                s"[${foundFringes.map(_.show).mkString(", ")}] does not equal " +
+                s"block's fringes " +
+                s"[${block.fringes.map(_.show).mkString(",")}]"
             )
             .as(InvalidRejectedDeploy.asLeft)
         } else {
@@ -134,11 +133,12 @@ object InterpreterUtil {
       val bmd = BlockMetadata
         .fromBlock(block)
         .copy(
-          bondsMap = preState.fringeBondsMap,
+          bondsMap = preState.bonds,
           validated = true,
           validationFailed = result.isLeft || !result.toOption.get,
           fringe = preState.fringe,
-          fringeStateHash = preState.fringeState.bytes.toArray.toByteString
+          fringeStateHash = preState.fringeState.bytes.toArray.toByteString,
+          ejections = preState.toEject
         )
       (bmd, result)
     }

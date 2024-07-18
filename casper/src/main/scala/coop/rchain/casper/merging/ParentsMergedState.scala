@@ -2,7 +2,7 @@ package coop.rchain.casper.merging
 
 import com.google.protobuf.ByteString
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.BlockMetadata
+import coop.rchain.models.{BlockMetadata, FringeData}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.rspace.hashing.Blake2b256Hash
 
@@ -15,7 +15,7 @@ import coop.rchain.rspace.hashing.Blake2b256Hash
   * @param maxSeqNums latest sequence numbers for bonded validators
   * @param fringe finalized fringe seen (finalized) by parents
   * @param fringeState finalized fringe (merged) state
-  * @param fringeBondsMap bonds map of validators on finalized fringe state
+  * @param bonds bonds map observed by message
   * @param fringeRejectedDeploys rejected deploys from blocks finalized with [[fringe]] blocks
   * @param preStateHash state hash after non-finalized blocks are merged
   * @param rejectedDeploys rejected deploys after non-finalized blocks are merged
@@ -27,9 +27,10 @@ final case class ParentsMergedState(
     // Fringe merged state
     fringe: Set[BlockHash],
     fringeState: Blake2b256Hash,
-    fringeBondsMap: Map[Validator, Long],
-    fringeRejectedDeploys: Set[ByteString],
+    bonds: Map[Validator, Long],
+    foundFringes: List[FringeData],
     // Conflict scope state (non-finalized blocks)
     preStateHash: Blake2b256Hash,
-    rejectedDeploys: Set[ByteString]
+    rejectedDeploys: Set[ByteString],
+    toEject: Set[ByteString]
 )

@@ -12,7 +12,8 @@ import coop.rchain.casper.util.ProtoUtil.unsignedBlockProto
 import coop.rchain.casper.{PrettyPrinter, ValidatorIdentity}
 import coop.rchain.crypto.PublicKey
 import coop.rchain.crypto.signatures.Signed
-import coop.rchain.models.BlockVersion
+import coop.rchain.models.syntax.modelsSyntaxByteString
+import coop.rchain.models.{BlockVersion, FringeData}
 import coop.rchain.rholang.interpreter.SystemProcesses.BlockData
 import coop.rchain.rspace.hashing.Blake2b256Hash
 import coop.rchain.sdk.dag.View
@@ -126,11 +127,18 @@ object Genesis {
       postStateHash = postStateHash,
       justifications = List.empty,
       bonds = buildBondsMap(genesis.proofOfStake),
-      rejectedDeploys = Set.empty,
       state = state,
       view = View.semigroupDagSeen.empty,
       fringe = List.empty,
-      mergeables
+      mergeables,
+      List(
+        FringeData(
+          FringeData.fringeHash(Set()),
+          Set(),
+          RuntimeManager.emptyStateHashFixed.toBlake2b256Hash,
+          Set()
+        )
+      )
     )
   }
 

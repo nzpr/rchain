@@ -26,7 +26,9 @@ final case class BlockMetadata(
     fringeStateHash: StateHash,
     // Fringe (fringe hash) where/when block is finalized
     memberOfFringe: Option[Blake2b256Hash],
-    view: View[Validator]
+    view: View[Validator],
+    // local decision to eject sender when computing fringe
+    ejections: Set[Validator]
 ) {
   // BlockMetadata is uniquely identified with BlockHash
   // - overridden hashCode is to be more performant when used in Set or Map
@@ -46,7 +48,8 @@ object BlockMetadata {
     b.fringe.toSet,
     b.fringeStateHash,
     Option(b.memberOfFringe).filterNot(_.isEmpty).map(_.toBlake2b256Hash),
-    View(b.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap)
+    View(b.view.map(x => x.validator -> (x.seqStart.toInt to x.seqEnd.toInt)).toMap),
+    b.ejections.toSet
   )
 
   def toProto(b: BlockMetadata) = BlockMetadataProto(
@@ -61,7 +64,8 @@ object BlockMetadata {
     b.fringe.toList,
     b.fringeStateHash,
     b.memberOfFringe.map(_.toByteString).getOrElse(ByteString.EMPTY),
-    b.view.seen.toList.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) }
+    b.view.seen.toList.map { case (v, r) => ViewProto(v, r.start.toLong, r.end.toLong) },
+    b.ejections.toList
   )
 
   def fromBytes(bytes: Array[Byte]): BlockMetadata =
@@ -83,6 +87,12 @@ object BlockMetadata {
       fringe = b.fringe.toSet,
       fringeStateHash = b.finStateHash,
       memberOfFringe = none,
-      view = b.view
+      view = b.view,
+      ejections = b.state.systemDeploys
+        .map(_.systemDeploy)
+        .collect {
+          case EjectSystemDeployData(ejectedValidator) => ejectedValidator
+        }
+        .toSet
     )
 }

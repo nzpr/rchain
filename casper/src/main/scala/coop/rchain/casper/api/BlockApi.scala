@@ -111,7 +111,8 @@ object BlockApi {
       blockSize = block.toProto.serializedSize.toString,
       deployCount = block.state.deploys.length,
       justifications = block.justifications.map(PrettyPrinter.buildStringNoLimit),
-      rejectedDeploys = block.rejectedDeploys.toSeq.map(PrettyPrinter.buildStringNoLimit),
+      rejectedDeploys =
+        block.fringes.flatMap(_.rejectedDeploys).map(PrettyPrinter.buildStringNoLimit),
       view = block.view.seen.map {
         case (v, r) => ViewInfo(v.toHexString, r.start.toLong, r.end.toLong)
       }.toList

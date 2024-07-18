@@ -11,7 +11,7 @@ import coop.rchain.blockstorage.dag.codecs._
 import coop.rchain.blockstorage.syntax._
 import coop.rchain.casper.dag.BlockDagKeyValueStorage._
 import coop.rchain.casper.merging.BlockIndex
-import coop.rchain.casper.protocol.{BlockMessage, DeployData}
+import coop.rchain.casper.protocol.{BlockMessage, DeployData, EjectSystemDeployData}
 import coop.rchain.casper.{MultiParentCasper, PrettyPrinter}
 import coop.rchain.crypto.signatures.Signed
 import coop.rchain.metrics.Metrics.Source
@@ -45,6 +45,7 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
 
   def getRepresentation: F[DagRepresentation] = representationState.get
 
+  // TODO store FringeData from PreState
   override def insert(
       blockMetadata: BlockMetadata,
       block: BlockMessage,
@@ -63,7 +64,7 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         _ <- deployIndex.put(block.state.deploys.map(_.deploy.sig).map(_ -> block.blockHash))
 
         // Add fringe data
-        fringeHash = FringeData.fringeHash(blockMetadata.fringe)
+//        fringeHash = FringeData.fringeHash(blockMetadata.fringe)
         // Calculate blocks included in the fringe
         //        justificationsMsgs = blockMetadata.justifications.map(dagState.msgMap)
         //        prevFringeMsgs = dagState.msgMap.latestFringe(justificationsMsgs)
@@ -85,32 +86,35 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
         //        fringeDiffMetas        <- fringeDiffHashes.toList.traverse(blockMetadataIndex.getUnsafe)
         //        fringeDiffMetasUpdated = fringeDiffMetas.map(_.copy(memberOfFringe = fringeHash.some))
         //        _                      <- fringeDiffMetasUpdated.traverse(blockMetadataIndex.add)
-        metadataStateHash = blockMetadata.fringeStateHash.toBlake2b256Hash
-        fringeData = FringeData(
-          fringeHash,
-          fringe = blockMetadata.fringe,
-          //fringeDiff = fringeDiffHashes,
-          stateHash = metadataStateHash,
-          rejectedDeploys = block.rejectedDeploys,
-          rejectedBlocks = block.rejectedBlocks,
-          rejectedSenders = block.rejectedSenders
-        )
-        // Save to fringe data store
-        shouldSave <- (!blockMetadata.validationFailed).pure &&^ fringeDataStore
-                       .get1(fringeHash)
-                       .flatMap {
-                         case Some(fd) =>
-                           FatalError(
-                             s"Attempt do add block with equivocating fringe state hash. " +
-                               s"Fringe: ${blockMetadata.fringe.map(_.toHexString.take(6))}, " +
-                               s"persisted: ${fd.stateHash}, " +
-                               s"attempting to add: $metadataStateHash."
-                           ).raiseError
-                             .whenA(fd.stateHash != metadataStateHash)
-                             .as(false)
-                         case None => true.pure
-                       }
-        _ <- fringeDataStore.put(fringeHash, fringeData).whenA(shouldSave)
+//        metadataStateHash = blockMetadata.fringeStateHash.toBlake2b256Hash
+//        fringeData = FringeData(
+//          fringeHash,
+//          fringe = blockMetadata.fringe,
+//          //fringeDiff = fringeDiffHashes,
+//          stateHash = metadataStateHash,
+//          rejectedDeploys = block.rejectedDeploys
+//        )
+
+        _ <- block.fringes.traverse { fringeData =>
+              for {
+                // Save to fringe data store
+                shouldSave <- (!blockMetadata.validationFailed).pure &&^ fringeDataStore
+                               .get1(fringeData.fringeHash)
+                               .flatMap {
+                                 case Some(fd) =>
+                                   FatalError(
+                                     s"Attempt do add block with equivocating fringe state hash. " +
+                                       s"Fringe: ${blockMetadata.fringe.map(_.toHexString.take(6))}, " +
+                                       s"persisted: ${fd.stateHash}, " +
+                                       s"attempting to add: ${fringeData.stateHash}."
+                                   ).raiseError
+                                     .whenA(fd.stateHash != fringeData.stateHash)
+                                     .as(false)
+                                 case None => true.pure
+                               }
+                _ <- fringeDataStore.put(fringeData.fringeHash, fringeData).whenA(shouldSave)
+              } yield ()
+            }
 
         // Update in-mem indices
         dag      <- representationState.get
@@ -126,8 +130,10 @@ final class BlockDagKeyValueStorage[F[_]: Async: Log] private (
                 (msg.sender, msg.senderSeq),
                 dr.hashLookup.getOrElse((msg.sender, msg.senderSeq), Set()) + msg.id
               )
-              val newFringes = dr.fringeStates + ((msg.fringe, fringeData))
-              val newDagSet  = dr.dagSet + msg.id
+              val newFringes = block.fringes.foldLeft(dr.fringeStates) {
+                case (acc, fd) => acc + (fd.fringe -> fd)
+              }
+              val newDagSet = dr.dagSet + msg.id
               val newChildMap = msg.parents.foldLeft(dr.childMap) {
                 case (acc, p) => acc.updated(p, acc.get(p).map(_ + msg.id).getOrElse(Set(msg.id)))
               }
@@ -576,7 +582,8 @@ object BlockDagKeyValueStorage {
     bondsMap = block.bondsMap,
     parents = block.justifications,
     fringe = block.fringe,
-    seen = block.view
+    seen = block.view,
+    ejections = block.ejections
   )
 
   private def removeExpiredFromPool[F[_]: Monad](

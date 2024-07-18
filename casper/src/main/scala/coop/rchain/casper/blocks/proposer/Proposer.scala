@@ -159,7 +159,7 @@ object Proposer {
               nextSeqNum        = creatorsLatestOpt.map(_.seqNum + 1).getOrElse(0L)
               nextBlockNum      = preState.justifications.map(_.blockNum).max + 1
               parentHashes      = preState.justifications.map(_.blockHash)
-              finalBonds        = preState.fringeBondsMap
+              finalBonds        = preState.bonds
               offenders         = preState.justifications.filter(_.validationFailed).map(_.sender)
               // slashing
               preStateBonds <- RuntimeManager[F].computeBonds(preStateHash.toByteString)

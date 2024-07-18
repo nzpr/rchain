@@ -1,5 +1,6 @@
 package coop.rchain.models
 
+import cats.Show
 import com.google.protobuf.ByteString
 import coop.rchain.casper.protocol.FringeDataProto
 import coop.rchain.models.BlockHash.BlockHash
@@ -13,9 +14,7 @@ final case class FringeData(
     // fringeDiff: Set[BlockHash],
     stateHash: Blake2b256Hash,
     // Rejected data in finalized fringe
-    rejectedDeploys: Set[ByteString],
-    rejectedBlocks: Set[BlockHash],
-    rejectedSenders: Set[ByteString]
+    rejectedDeploys: Set[ByteString]
 ) {
   // FringeData is uniquely identified with the hash of fringe hashes
   // - overridden hashCode is to be more performant when used in Set or Map
@@ -40,9 +39,7 @@ object FringeData {
     b.fringe.toSet,
 //    b.fringeDiff.toSet,
     b.stateHash.toBlake2b256Hash,
-    b.rejectedDeploys.toSet,
-    b.rejectedBlocks.toSet,
-    b.rejectedSenders.toSet
+    b.rejectedDeploys.toSet
   )
 
   def toProto(b: FringeData) = FringeDataProto(
@@ -50,13 +47,21 @@ object FringeData {
     b.fringe.toList,
     //b.fringeDiff.toList,
     b.stateHash.toByteString,
-    b.rejectedDeploys.toList,
-    b.rejectedBlocks.toList,
-    b.rejectedSenders.toList
+    b.rejectedDeploys.toList
   )
 
   def fromBytes(bytes: Array[Byte]): FringeData =
     from(FringeDataProto.parseFrom(bytes))
 
   def toBytes(b: FringeData) = FringeData.toProto(b).toByteArray
+
+  implicit def showFringe: Show[FringeData] = new Show[FringeData] {
+    override def show(t: FringeData): String =
+      s"""
+         |${t.fringe.toList.sorted
+           .map(_.toHexString.take(8))
+           .mkString("-")}_@_${t.stateHash.toByteString.toHexString}_R_[${t.rejectedDeploys.toList.sorted
+           .map(_.toHexString.take(8))}]
+         |""".stripMargin
+  }
 }
