@@ -103,6 +103,11 @@ object MergeScope {
     (MergeScope(fScopeIds, cScopeIds /*-- baseMsg.toSet*/ ), baseMsg)
   }
 
+  implicit val showDCI = new Show[DeployChainIndex] {
+    override def show(t: DeployChainIndex): String =
+      t.deploysWithCost.map(_.id.toHexString.take(8)).mkString(";")
+  }
+
   def merge[F[_]: Async: Log](
       mergeScope: MergeScope,
       baseState: Blake2b256Hash,
@@ -137,14 +142,42 @@ object MergeScope {
         )
         // TODO conflictsMap and dependentsMap computations are expensive
         //  can be cached and updated on new block added | new fringe finalized
+        val int = conflictSet.map(_.deploysWithCost.map(_.id)) intersect finalSet.map(
+          _.deploysWithCost.map(_.id)
+        )
+        assert(
+          int.isEmpty,
+          s"conflictSet intersects finalSet ${int.map(_.map(_.toHexString.take(8)))}"
+        )
         val (conflictsMap, dependencyMap) = ConflictResolutionLogic.computeRelationMapForMergeSet(
           conflictSet,
           finalSet,
           DeployChainIndex.deploysAreConflicting,
           DeployChainIndex.depends
         )
-        val resolveConflicts = loadInitMergeableValues.map { initMergeableValues =>
-          ConflictResolutionLogic.resolveConflictSet[DeployChainIndex, Blake2b256Hash](
+        val resolveConflicts = Log[F].info(
+          s"conflictsMap: \n${conflictsMap
+            .map {
+              case (k, v) =>
+                k.deploysWithCost.map(_.id.toHexString.take(8)).toList.sorted.mkString(">") -> v
+                  .map(_.deploysWithCost.map(_.id.toHexString.take(8)).toList.sorted.mkString(">"))
+                  .toList
+                  .sorted
+            }
+            .map { case (k, v) => s"$k --- ${v.mkString("&")}" }
+            .mkString("\n")}" ++
+            s"\ndependsMap: \n${dependencyMap
+              .map {
+                case (k, v) =>
+                  k.deploysWithCost.map(_.id.toHexString.take(8)).toList.sorted.mkString(">") -> v
+                    .map(_.deploysWithCost.map(_.id.toHexString.take(8)).toList.sorted.mkString(">"))
+                    .toList
+                    .sorted
+              }
+              .map { case (k, v) => s"$k --- ${v.mkString("&")}" }
+              .mkString("\n")}"
+        ) *> loadInitMergeableValues.flatMap { initMergeableValues =>
+          ConflictResolutionLogic.resolveConflictSet[F, DeployChainIndex, Blake2b256Hash](
             conflictSet = conflictSet,
             acceptedFinally = acceptedFinally.map(_._2).toSet,
             rejectedFinally = rejectedFinally.map(_._2).toSet,
@@ -154,18 +187,23 @@ object MergeScope {
             dependencyMap = dependencyMap,
             // support for mergeable
             mergeableDiffs = mergeableDiffsMap,
-            initMergeableValues = initMergeableValues
+            initMergeableValues = initMergeableValues,
+            Log[F].info(_)
           )
         }
         resolveConflicts.flatMap {
           case (toMerge, rejected) =>
-            computeMergedState(toMerge, baseState, historyRepository).map { newState =>
-              (
-                newState,
-                toMerge.flatMap(_.deploysWithCost.map(_.id)),
-                rejected.flatMap(_.deploysWithCost.map(_.id))
-              )
-            }
+            Log[F].info(
+              s"toMerge ${toMerge.map(_.deploysWithCost.map(_.id.toHexString.take(8)))} " +
+                s"toReject ${rejected.map(_.deploysWithCost.map(_.id.toHexString.take(8)))}"
+            ) *>
+              computeMergedState(toMerge, baseState, historyRepository).map { newState =>
+                (
+                  newState,
+                  toMerge.flatMap(_.deploysWithCost.map(_.id)),
+                  rejected.flatMap(_.deploysWithCost.map(_.id))
+                )
+              }
         }
     }
   }

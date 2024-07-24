@@ -505,6 +505,59 @@ in {
                       }
                     }
                   } |
+                  // Private method which transfers all of a validator's rewards + bond to the Coop vault.
+                  // Slash expects (Boolean, Either[Nil, String]) on returnCh.
+                  contract PoS(@"eject", @ejectedValidator, @sysAuthToken, returnCh) = {
+                    new isValidTokenCh, revAddressOps(`rho:rev:address`) in {
+                      sysAuthTokenOps!("check", sysAuthToken, *isValidTokenCh) |
+                      for (@isValid <- isValidTokenCh) {
+                        if (isValid) {
+                          new stateProcessCh in {
+                            runMVar!(*stateCh, *stateProcessCh, *returnCh) |
+                            for (@state, stateUpdateCh <- stateProcessCh) {
+                              new valBondCh, valRewardCh, posAuthKeyCh, revAddrCh in {
+                                // Takes the stake of slashed validator
+                                // - transfer stake of ejected validator from PoS to validators vault
+                                // - update state
+                                valBondCh!(state.get("allBonds").get(ejectedValidator)) |
+                                @RevVault!("unforgeableAuthKey", posVaultUnf, *posAuthKeyCh) |
+                                revAddressOps!("fromPublicKey", ejectedValidator, *revAddrCh) |
+                                for (@valBond <- valBondCh ; @posAuthKey <- posAuthKeyCh; @target <- revAddrCh) {
+                                  // Transfers ejected funds from PoS vault to validators vault, then updates state.
+                                  new transferDoneCh in {
+                                    @posVault!(
+                                      "transfer",
+                                      target,
+                                      valBond,
+                                      posAuthKey,
+                                      *transferDoneCh
+                                    ) |
+                                    // FIXME handle transfer failing case
+                                    for (_ <- transferDoneCh) {
+                                      // Sets slashed validator's committed rewards and bond to 0 in state.
+                                      // Moves slashed validator to withdrawers map with no quarantine period.
+                                      stateUpdateCh!({
+                                        "allBonds"        : state.get("allBonds").set(ejectedValidator, 0),
+                                        "activeValidators": state.get("activeValidators").delete(ejectedValidator),
+                                        "committedRewards" : state.get("committedRewards").delete(ejectedValidator),
+                                        "withdrawers"     : state.get("withdrawers"),
+                                        "pendingWithdrawers": state.get("pendingWithdrawers"),
+                                        "randomImages"    : state.get("randomImages"),
+                                        "randomNumbers"   : state.get("randomNumbers")
+                                      },
+                                      (true, Nil))
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        } else {
+                          returnCh!((false, "Invalid system auth token"))
+                        }
+                      }
+                    }
+                  } |
                   // Private method which signals the end of block processing.
                   contract PoS(@"closeBlock", @sysAuthToken, ackCh) = {
                     new isValidTokenCh in {

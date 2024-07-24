@@ -9,7 +9,7 @@ import coop.rchain.blockstorage.dag.BlockDagStorage.DeployId
 import coop.rchain.casper.merging.ParentsMergedState
 import coop.rchain.casper.protocol.{ProcessedDeploy, ProcessedSystemDeploy, RholangState}
 import coop.rchain.casper.rholang.RuntimeManager.StateHash
-import coop.rchain.casper.rholang.sysdeploys.{CloseBlockDeploy, SlashDeploy}
+import coop.rchain.casper.rholang.sysdeploys.{CloseBlockDeploy, EjectDeploy, SlashDeploy}
 import coop.rchain.casper.rholang.{BlockRandomSeed, InterpreterUtil, RuntimeManager}
 import coop.rchain.casper.syntax.casperSyntaxRuntimeManager
 import coop.rchain.casper.util.ProtoUtil
@@ -34,7 +34,7 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
   ): F[BlockCreatorResult] = {
     val preStateHash      = preState.preStateHash
     val parents           = preState.justifications.map(_.blockHash)
-    val bondsMap          = preState.fringeBondsMap
+    val bondsMap          = preState.bonds
     val blockNum          = preState.justifications.map(_.blockNum).max + 1
     val creatorsPk        = id.publicKey
     val creatorsId        = creatorsPk.bytes.toByteString
@@ -44,7 +44,7 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
     val shouldPropose     = deploys.nonEmpty || toSlash.nonEmpty || changeEpoch
 
     // deploys that are rejected on finalization done by the block being created
-    val finalization = preState.fringeRejectedDeploys
+    val finalization = preState.foundFringes.flatMap(_.rejectedDeploys).toSet
 
     def propose: F[StateTransitionResult] = {
       val rand = BlockRandomSeed.randomGenerator(shardId, blockNum, creatorsPk, preStateHash)
@@ -56,9 +56,18 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
         toSlash.toList.sorted.zip(slashSeeds).map(SlashDeploy.tupled)
       }
 
+      val ejectDeploys = {
+        // seeds from 0 to deploys.size are used in deploys execution, so system deploy seeds start from the next index
+        val seeds =
+          (0 until preState.toEject.size)
+            .map(_ + deploys.size + toSlash.size)
+            .map(i => rand.splitByte(i.toByte))
+        preState.toEject.toList.sorted.zip(seeds).map(EjectDeploy.tupled)
+      }
+
       // Close block using rholang only if rholang state has been adjusted by a block
       val closeDeployOpt = (slashDeploys.nonEmpty || deploys.nonEmpty).guard[Option].as {
-        val closeSeed = rand.splitByte((deploys.size + toSlash.size).toByte)
+        val closeSeed = rand.splitByte((deploys.size + toSlash.size + toSlash.size).toByte)
         CloseBlockDeploy(closeSeed)
       }
 
@@ -111,11 +120,11 @@ final case class BlockCreator(id: ValidatorIdentity, shardId: String) {
               postStateHash,
               parents.toList,
               bondsMap,
-              finalization,
               state,
               view,
               preState.fringe.toList.sorted,
-              mergeables
+              mergeables,
+              preState.foundFringes
             )
 
             // Sign a block (hash should not be changed)

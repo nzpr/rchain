@@ -1,6 +1,7 @@
 package coop.rchain.sdk.dag.merging
 
-import cats.Order
+import cats.effect.kernel.Sync
+import cats.{Order, Show}
 import cats.syntax.all._
 
 import scala.collection.compat.immutable.LazyList
@@ -10,12 +11,9 @@ import scala.math.Numeric.LongIsIntegral
 object ConflictResolutionLogic {
 
   /** All items in dependency chains. */
-  def withDependencies[D](of: Set[D], dependencyMap: Map[D, Set[D]]): Set[D] = {
-    def next(curOpt: Option[Set[D]]): Option[Set[D]] = curOpt.flatMap { c =>
-      val n = c.flatMap(dependencyMap.getOrElse(_, Set()))
-      n.nonEmpty.guard[Option].as(n)
-    }
-    LazyList.iterate(of.some)(next).takeWhile(_.nonEmpty).flatten.flatten.toSet
+  def withDependencies[D](of: Seq[D], dependencyMap: Map[D, Set[D]]): Seq[D] = {
+    def next(x: Seq[D]): Seq[D] = x.flatMap { dependencyMap.getOrElse(_, Set()) }
+    LazyList.iterate(of)(next).takeWhile(_.nonEmpty).flatten
   }
 
   /** Deploys incompatible with finalized body. */
@@ -197,7 +195,7 @@ object ConflictResolutionLogic {
                 calMergedResult(deploy, balancesAcc)
                   .map((_, rejectedAcc))
                   .getOrElse(
-                    (balancesAcc, rejectedAcc ++ withDependencies(Set(deploy), dependencyMap))
+                    (balancesAcc, rejectedAcc ++ withDependencies(Seq(deploy), dependencyMap))
                   )
           }
       }
@@ -214,7 +212,7 @@ object ConflictResolutionLogic {
   }
 
   /** Compute resolution for conflict set. */
-  def resolveConflictSet[D: Ordering, CH](
+  def resolveConflictSet[F[_]: Sync, D: Ordering: Show, CH](
       conflictSet: Set[D],
       acceptedFinally: Set[D],
       rejectedFinally: Set[D],
@@ -225,28 +223,49 @@ object ConflictResolutionLogic {
       dependencyMap: Map[D, Set[D]],
       // support for mergeable
       mergeableDiffs: Map[D, Map[CH, Long]],
-      initMergeableValues: Map[CH, Long]
-  ): (Set[D], Set[D]) = {
+      initMergeableValues: Map[CH, Long],
+      log: String => F[Unit]
+  ): F[(Set[D], Set[D])] = {
+    val incWithFin =
+      incompatibleWithFinal(acceptedFinally, rejectedFinally, conflictsMap, dependencyMap)
     val enforceRejected = withDependencies(
-      incompatibleWithFinal(acceptedFinally, rejectedFinally, conflictsMap, dependencyMap),
+      incWithFin.toSeq,
       dependencyMap
     )
     val conflictSetCompatible = conflictSet -- enforceRejected
     // conflict map accounting for dependencies
     val fullConflictsMap =
-      conflictsMap.view.mapValues(vs => vs ++ withDependencies(vs, dependencyMap)).toMap
+      conflictsMap.view
+        .filterKeys(conflictSetCompatible)
+        .mapValues { vs =>
+          val vsConfitSet = vs.filter(conflictSetCompatible)
+          vsConfitSet ++ withDependencies(vsConfitSet.toSeq, dependencyMap)
+        }
+        .toMap
     // find rejection combinations possible
     val rejectionOptions = computeRejectionOptions(fullConflictsMap)
-    // add to rejection options rejections caused by mergeable channels overflow
-    val mergeableOverflowRejectionOptions = addMergeableOverflowRejections(
-      conflictSet,
-      dependencyMap,
-      rejectionOptions,
-      initMergeableValues,
-      mergeableDiffs
-    )
-    // find optimal rejection
-    val resolved = computeOptimalRejection(mergeableOverflowRejectionOptions, cost)
-    (conflictSetCompatible -- resolved, resolved ++ enforceRejected)
+    log(
+      s"acceptedFinally ${acceptedFinally.map(_.show).mkString("\n")}\n " +
+        s"rejectedFinally ${rejectedFinally.map(_.show).mkString("\n")}\n " +
+        s"incWithFin ${incWithFin.map(_.show).mkString("\n")}\n " +
+        s"rejectionOptions: ${rejectionOptions.map(_.map(_.show)).mkString("\n")}\n " +
+        s"enforceRejected: ${enforceRejected.toList.map(_.show)}"
+    ).flatMap { _ =>
+      // add to rejection options rejections caused by mergeable channels overflow
+      val mergeableOverflowRejectionOptions = addMergeableOverflowRejections(
+        conflictSet,
+        dependencyMap,
+        rejectionOptions,
+        initMergeableValues,
+        mergeableDiffs
+      )
+      log(
+        s"mergeableOverflowRejectionOptions ${mergeableOverflowRejectionOptions.map(_.map(_.show)).mkString("\n")}"
+      ).as {
+        // find optimal rejection
+        val resolved = computeOptimalRejection(mergeableOverflowRejectionOptions, cost)
+        (conflictSetCompatible -- resolved, resolved ++ enforceRejected)
+      }
+    }
   }
 }

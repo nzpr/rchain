@@ -17,7 +17,7 @@ import coop.rchain.casper.syntax._
 import coop.rchain.casper.util.ConstructDeploy
 import coop.rchain.metrics.{Metrics, Span}
 import coop.rchain.models.BlockHash.BlockHash
-import coop.rchain.models.BlockMetadata
+import coop.rchain.models.{BlockMetadata, FringeData}
 import coop.rchain.models.Validator.Validator
 import coop.rchain.models.block.StateHash._
 import coop.rchain.models.blockImplicits.getRandomBlock
@@ -41,11 +41,12 @@ object BlockGenerator {
     maxSeqNums = Map.empty,
     fringe = Set(),
     fringeState = RuntimeManager.emptyStateHashFixed.toBlake2b256Hash,
-    fringeBondsMap = Map.empty,
-    fringeRejectedDeploys = Set(),
+    bonds = Map.empty,
+    foundFringes = List.empty[FringeData],
     // Pre-state is the same as fringe state
     preStateHash = RuntimeManager.emptyStateHashFixed.toBlake2b256Hash,
-    rejectedDeploys = Set()
+    rejectedDeploys = Set(),
+    toEject = Set()
   )
 
   def step[F[_]: Async: RuntimeManager: BlockDagStorage: BlockStore: Log: Metrics: Span](
