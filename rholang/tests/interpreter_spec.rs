@@ -1,7 +1,9 @@
 // See rholang/src/test/scala/coop/rchain/rholang/InterpreterSpec.scala
 
-use models::rhoapi::{expr, Expr, Par};
+use crypto::rust::hash::blake2b512_random::Blake2b512Random;
+use models::rhoapi::{expr, Bundle, Expr, Par};
 use rholang::rust::interpreter::accounting::costs::{parsing_cost, subtraction_cost_with_value};
+use rholang::rust::interpreter::env::Env;
 use rholang::rust::interpreter::{
     errors::InterpreterError,
     interpreter::EvaluateResult,
@@ -226,4 +228,67 @@ async fn interpreter_should_charge_for_parsing_even_when_not_enough_phlo() {
         assert_eq!(result.cost.value, initial_phlo.value);
     })
     .await
+}
+
+#[test]
+fn interpreter_stack_safety_regression() {
+    // --- Stack-safety ---------------------------------------------------------------------------
+    // Par evaluation can be arbitrarily nested, so traversal must be stack-safe. This test walks
+    // increasing nesting depths on a fixed-size thread stack. It will fail (panic) as soon as the
+    // interpreter blows the stack; if the interpreter becomes stack-safe, the loop will complete
+    // and the test will pass. Depths grow exponentially to cover both shallow and very deep cases.
+    // Heuristic: many 64-bit systems give the main thread ~8 MiB and spawned threads ~2 MiB.
+    // Use a "usual" 8 MiB stack and probe at 10x that to stress the interpreter without immediately overflowing.
+    const USUAL_STACK_BYTES: usize = 8 * 1024 * 1024;
+    const STACK_SIZE: usize = USUAL_STACK_BYTES * 10; // ~80 MiB
+
+    fn nested_bundles(depth: usize) -> Par {
+        let mut par = Par::default();
+
+        for _ in 0..depth {
+            par = Par::default().with_bundles(vec![Bundle {
+                body: Some(par),
+                write_flag: true,
+                read_flag: true,
+            }]);
+        }
+
+        par
+    }
+
+    // Depths ramp up quickly; adjust upper bound if you want to probe even deeper.
+    let mut depths: Vec<usize> = Vec::new();
+    let mut d = 10;
+    while d <= 1_000_000 {
+        depths.push(d);
+        d = d.saturating_mul(2);
+    }
+
+    for depth in depths {
+        println!("Trying Par depth {depth}");
+        let par = nested_bundles(depth);
+        println!("Par created");
+        let rand = Blake2b512Random::create_from_length(128);
+
+        // Run each depth in a dedicated thread with a fixed, modest stack so overflow
+        // is detected deterministically and doesn’t abort the whole test process.
+        let handle = std::thread::Builder::new()
+            .stack_size(STACK_SIZE)
+            .spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(with_runtime(
+                    "stack-safety-probe-",
+                    |mut runtime| async move { runtime.inj(par, Env::new(), rand).await },
+                ))
+            })
+            .expect("failed to spawn thread");
+
+        match handle.join() {
+            Ok(Ok(())) => {
+                println!("stack-safety: depth {depth} succeeded on {STACK_SIZE} bytes");
+            }
+            Ok(Err(e)) => panic!("interpreter returned error at depth {depth}: {e:?}"),
+            Err(_) => panic!("stack overflow or panic at depth {depth} on {STACK_SIZE} bytes"),
+        }
+    }
 }
